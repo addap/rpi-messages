@@ -13,10 +13,9 @@ use core::str::from_utf8;
 use cortex_m::asm::wfe;
 use cyw43::Control;
 use cyw43_pio::PioSpi;
-// use defmt::*;
-// use defmt::*;
 use embassy_embedded_hal::shared_bus::blocking::spi::{SpiDevice, SpiDeviceWithConfig};
 use embassy_executor::Spawner;
+use embassy_futures::yield_now;
 use embassy_net::tcp::TcpSocket;
 use embassy_net::{Config, Stack, StackResources};
 use embassy_rp::gpio::{Level, Output};
@@ -36,7 +35,6 @@ use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyleBuilder, Rectangle};
 use embedded_graphics::text::Text;
-use embedded_io_async::Write;
 use heapless::String;
 use st7735_lcd::{Orientation, ST7735};
 use static_cell::make_static;
@@ -45,8 +43,6 @@ use {defmt_rtt as _, panic_probe as _};
 const DISPLAY_FREQ: u32 = 10_000_000;
 const WIFI_NETWORK: &str = "Buffalo-G-1337";
 const WIFI_PASSWORD: &str = "hahagetfucked";
-
-static TEXT: CriticalSectionMutex<RefCell<String<32>>> = Mutex::new(RefCell::new(String::new()));
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => pio::InterruptHandler<PIO0>;
@@ -79,7 +75,11 @@ fn min(a: usize, b: usize) -> usize {
 }
 
 #[embassy_executor::task]
-async fn get_data_task(stack: &'static Stack<cyw43::NetDriver<'static>>, control: &'static mut Control<'static>) {
+async fn get_data_task(
+    stack: &'static Stack<cyw43::NetDriver<'static>>,
+    control: &'static mut Control<'static>,
+    text: &'static Mutex<NoopRawMutex, RefCell<String<32>>>,
+) {
     // And now we can use it!
 
     let mut rx_buffer = [0; 4096];
@@ -114,11 +114,12 @@ async fn get_data_task(stack: &'static Stack<cyw43::NetDriver<'static>>, control
             };
 
             log::info!("rxd {}", from_utf8(&buf[..n]).unwrap());
+            yield_now().await;
 
-            TEXT.lock(|mut rc| {
+            text.lock(|rc| {
                 let mut x = rc.borrow_mut();
                 x.clear();
-                for &c in &buf[..(min(n, 32))] {
+                for &c in buf[..n].iter().take(32) {
                     x.push(c as char).unwrap();
                 }
             })
@@ -133,11 +134,12 @@ async fn display_messages_task(
         Output<'_, embassy_rp::peripherals::PIN_8>,
         Output<'_, embassy_rp::peripherals::PIN_12>,
     >,
+    text: &'static Mutex<NoopRawMutex, RefCell<String<32>>>,
 ) {
     let style = MonoTextStyle::new(&FONT_10X20, Rgb565::GREEN);
 
     loop {
-        TEXT.lock(|rc| {
+        text.lock(|rc| {
             let x = rc.borrow();
             Text::new(x.as_str(), Point::new(20, 100), style).draw(display).unwrap();
         });
@@ -154,6 +156,8 @@ async fn main(spawner: Spawner) {
     let driver = Driver::new(p.USB, Irqs);
     spawner.spawn(logger_task(driver)).unwrap();
     log::info!("Hello World!");
+
+    let text: &Mutex<NoopRawMutex, _> = make_static!(Mutex::new(RefCell::new(String::new())));
 
     //////////////////  WIFI
     {
@@ -205,7 +209,7 @@ async fn main(spawner: Spawner) {
         }
 
         let scontrol = make_static!(control);
-        spawner.spawn(get_data_task(stack, scontrol)).unwrap();
+        spawner.spawn(get_data_task(stack, scontrol, text)).unwrap();
     }
     ///////////////////////// WIFI
 
@@ -215,10 +219,6 @@ async fn main(spawner: Spawner) {
     let dcx = p.PIN_8;
     let mosi = p.PIN_11;
     let clk = p.PIN_10;
-
-    let mut img1 = [0u16; 160 * 130];
-    let mut img2 = [0u16; 160 * 130];
-    let mut img3 = [0u16; 160 * 130];
 
     // let pinv = [dcx, mosi];
 
@@ -259,7 +259,9 @@ async fn main(spawner: Spawner) {
 
     display.clear(Rgb565::RED).unwrap();
 
-    spawner.spawn(display_messages_task(make_static!(display))).unwrap();
+    spawner
+        .spawn(display_messages_task(make_static!(display), text))
+        .unwrap();
 }
 
 async fn init_wifi(spawner: &Spawner, p: Peripherals) {}
