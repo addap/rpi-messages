@@ -7,7 +7,8 @@
 #![no_main]
 #![feature(type_alias_impl_trait)]
 
-use core::cell::RefCell;
+use core::borrow::BorrowMut;
+use core::cell::{RefCell, RefMut};
 use core::str::from_utf8;
 
 use cortex_m::asm::wfe;
@@ -19,13 +20,13 @@ use embassy_futures::yield_now;
 use embassy_net::tcp::TcpSocket;
 use embassy_net::{Config, Stack, StackResources};
 use embassy_rp::gpio::{Level, Output};
+use embassy_rp::pac::common::R;
 use embassy_rp::peripherals::{DMA_CH0, PIN_23, PIN_25, PIO0, USB};
 use embassy_rp::spi::{Blocking, Spi};
 use embassy_rp::usb::Driver;
 use embassy_rp::{bind_interrupts, pio, spi, usb, Peripherals};
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-// use embassy_sync::mutex::Mutex;
-use embassy_sync::blocking_mutex::{CriticalSectionMutex, Mutex};
+use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
+use embassy_sync::blocking_mutex::Mutex;
 use embassy_time::{Delay, Duration, Timer};
 use embedded_graphics::draw_target::DrawTarget;
 use embedded_graphics::image::{Image, ImageRawLE};
@@ -36,6 +37,7 @@ use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyleBuilder, Rectangle};
 use embedded_graphics::text::Text;
 use heapless::String;
+use rpi_messages_pico::messagebuf::{self, Messages};
 use st7735_lcd::{Orientation, ST7735};
 use static_cell::make_static;
 use {defmt_rtt as _, panic_probe as _};
@@ -43,6 +45,8 @@ use {defmt_rtt as _, panic_probe as _};
 const DISPLAY_FREQ: u32 = 10_000_000;
 const WIFI_NETWORK: &str = "Buffalo-G-1337";
 const WIFI_PASSWORD: &str = "hahagetfucked";
+
+static text: Mutex<CriticalSectionRawMutex, RefCell<Option<Messages>>> = Mutex::new(RefCell::new(None));
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => pio::InterruptHandler<PIO0>;
@@ -66,19 +70,11 @@ async fn logger_task(driver: Driver<'static, USB>) {
     embassy_usb_logger::run!(1024, log::LevelFilter::Info, driver);
 }
 
-fn min(a: usize, b: usize) -> usize {
-    if a < b {
-        a
-    } else {
-        b
-    }
-}
-
 #[embassy_executor::task]
 async fn get_data_task(
     stack: &'static Stack<cyw43::NetDriver<'static>>,
     control: &'static mut Control<'static>,
-    text: &'static Mutex<NoopRawMutex, RefCell<String<32>>>,
+    // text: &'static Mutex<NoopRawMutex, RefCell<Messages>>,
 ) {
     // And now we can use it!
 
@@ -114,15 +110,22 @@ async fn get_data_task(
             };
 
             log::info!("rxd {}", from_utf8(&buf[..n]).unwrap());
-            yield_now().await;
+            // yield_now().await;
 
+            log::info!("get_data: before lock mutex");
             text.lock(|rc| {
+                log::info!("get_data: after lock mutex");
                 let mut x = rc.borrow_mut();
-                x.clear();
+                log::info!("get_data: after borrow rc");
+                let x3 = x.as_mut().unwrap();
+                log::info!("get_data: after unwrap messages");
+                let x2 = x3.next_text();
+                x2.data.text.clear();
                 for &c in buf[..n].iter().take(32) {
-                    x.push(c as char).unwrap();
+                    x2.data.text.push(c as char).unwrap();
                 }
-            })
+                log::info!("get_data: after write string");
+            });
         }
     }
 }
@@ -134,14 +137,28 @@ async fn display_messages_task(
         Output<'_, embassy_rp::peripherals::PIN_8>,
         Output<'_, embassy_rp::peripherals::PIN_12>,
     >,
-    text: &'static Mutex<NoopRawMutex, RefCell<String<32>>>,
+    // text: &'static Mutex<NoopRawMutex, RefCell<Messages>>,
 ) {
     let style = MonoTextStyle::new(&FONT_10X20, Rgb565::GREEN);
+    let mut idx = 0;
 
     loop {
+        log::info!("display_messages: before lock mutex");
         text.lock(|rc| {
+            log::info!("display_messages: after lock mutex");
             let x = rc.borrow();
-            Text::new(x.as_str(), Point::new(20, 100), style).draw(display).unwrap();
+            let x3 = x.as_ref().unwrap();
+            log::info!("display_messages: after unwrap messages");
+            let x2 = x3.texts.get(idx).unwrap();
+
+            log::info!("{}", x2.data.text.as_str());
+            Text::new(x2.data.text.as_str(), Point::new(20, 100), style)
+                .draw(display)
+                .unwrap();
+            idx += 1;
+            if idx == x3.texts.len() {
+                idx = 0;
+            }
         });
         Timer::after(Duration::from_secs(1)).await;
         display.clear(Rgb565::RED).unwrap();
@@ -157,7 +174,15 @@ async fn main(spawner: Spawner) {
     spawner.spawn(logger_task(driver)).unwrap();
     log::info!("Hello World!");
 
-    let text: &Mutex<NoopRawMutex, _> = make_static!(Mutex::new(RefCell::new(String::new())));
+    // let messages = Messages::new();
+    // let text: &Mutex<NoopRawMutex, _> = make_static!(Mutex::new(RefCell::new(messages)));
+
+    {
+        text.lock(|rc| {
+            let mut x = rc.borrow_mut();
+            *x = Some(Messages::new());
+        });
+    }
 
     //////////////////  WIFI
     {
@@ -209,7 +234,7 @@ async fn main(spawner: Spawner) {
         }
 
         let scontrol = make_static!(control);
-        spawner.spawn(get_data_task(stack, scontrol, text)).unwrap();
+        spawner.spawn(get_data_task(stack, scontrol)).unwrap();
     }
     ///////////////////////// WIFI
 
@@ -259,9 +284,5 @@ async fn main(spawner: Spawner) {
 
     display.clear(Rgb565::RED).unwrap();
 
-    spawner
-        .spawn(display_messages_task(make_static!(display), text))
-        .unwrap();
+    spawner.spawn(display_messages_task(make_static!(display))).unwrap();
 }
-
-async fn init_wifi(spawner: &Spawner, p: Peripherals) {}
