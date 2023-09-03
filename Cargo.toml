@@ -1,6 +1,0 @@
-[workspace]
-members = [
-  "server",
-  "pico",
-]
-resolver = "2"
