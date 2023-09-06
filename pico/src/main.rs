@@ -18,6 +18,7 @@ use embassy_embedded_hal::shared_bus::blocking::spi::{SpiDevice, SpiDeviceWithCo
 use embassy_executor::Spawner;
 use embassy_futures::yield_now;
 use embassy_net::tcp::TcpSocket;
+use embassy_net::udp::UdpSocket;
 use embassy_net::{Config, IpAddress, IpEndpoint, Stack, StackResources};
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::pac::common::R;
@@ -36,7 +37,8 @@ use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyleBuilder, Rectangle};
 use embedded_graphics::text::Text;
-use rpi_messages_pico::messagebuf::{self, GenericMessage, Messages, IMAGE_WIDTH};
+use rpi_messages_pico::messagebuf::{self, GenericMessage, Messages, IMAGE_BUFFER_SIZE, IMAGE_WIDTH};
+use rpi_messages_pico::protocol::{ClientCommand, MessageUpdateKind, Protocol};
 use st7735_lcd::{Orientation, ST7735};
 use static_cell::make_static;
 use {defmt_rtt as _, panic_probe as _};
@@ -51,10 +53,11 @@ const MESSAGE_TEXT_STYLE: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&MESSAG
 
 const WIFI_SSID: &str = env!("WIFI_SSID");
 const WIFI_PASSWORD: &str = env!("WIFI_PASSWORD");
-const SOCKET_TIMEOUT: Duration = Duration::from_secs(10);
-const SERVER_ENDPOINT: IpEndpoint = IpEndpoint::new(IpAddress::v4(192, 168, 12, 1), 1337);
 const MESSAGE_FETCH_INTERVAL: Duration = Duration::from_secs(60);
+const SERVER_CONNECT_ERROR_WAIT: Duration = Duration::from_secs(10);
 
+/// Global variable to hold message data retrieved from server. No persistence accross reboots.
+/// We need the async mutex because we want to do an async read call inside a critical section.
 static MESSAGES: Mutex<CriticalSectionRawMutex, RefCell<Messages>> = Mutex::new(RefCell::new(Messages::new()));
 
 // TODO why do we need this?
@@ -94,55 +97,47 @@ async fn logger_task(driver: Driver<'static, USB>) {
 /// - `control`: a driver for the WIFI chip. TODO usage not clear.
 #[embassy_executor::task]
 async fn fetch_data_task(stack: &'static Stack<cyw43::NetDriver<'static>>, control: &'static mut Control<'static>) {
-    let mut rx_buffer = [0; 4096];
-    let mut tx_buffer = [0; 4096];
-    let mut buf = [0; 4096];
+    let mut tx_buffer = [0; 256];
 
     loop {
-        let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
-        socket.set_timeout(Some(SOCKET_TIMEOUT));
-
-        // TODO what does setting the gpio here do?
-        control.gpio_set(1, false).await;
-        log::info!("Connecting to server: {}", SERVER_ENDPOINT);
-        if let Err(e) = socket.connect(SERVER_ENDPOINT).await {
-            log::warn!("connect error: {:?}", e);
-            continue;
-        }
-        control.gpio_set(0, true).await;
-
-        // TODO send a command to server to fetch new messages. (Maybe give timestamp of last received message, or some counter?)
-        // Then read reply and receive an arbitrary amount of messages and save them to MESSAGES
-        // The order is:
-        //   - read meta message from server to know if image or text follows.
-        //   - lock MESSAGES, get next message buffer and read from socket.
-        //   - repeat
-        let n = match socket.read(&mut buf).await {
-            Ok(0) => {
-                log::warn!("read EOF");
-                break;
-            }
-            Ok(n) => n,
-            Err(e) => {
-                log::warn!("read error: {:?}", e);
-                break;
-            }
-        };
-
-        log::info!("rxd {}", from_utf8(&buf[..n]).unwrap());
-
         {
-            let mut guard = MESSAGES.lock().await;
-            let mut messages = RefCell::borrow_mut(&mut guard);
-            let message = messages.next_available_text();
-            unsafe {
-                let text_buf = message.data.text.as_bytes_mut();
-                socket.read(text_buf).await.unwrap();
-                if let Err(_) = core::str::from_utf8(text_buf) {
-                    log::warn!("Received invalid utf8 from server");
-                    text_buf.fill(0)
+            let protocol_res = Protocol::new(stack, control, &mut tx_buffer).await;
+            let mut protocol = match protocol_res {
+                Ok(protocol) => protocol,
+                Err(e) => {
+                    log::warn!("Connection error: {:?}", e);
+                    Timer::after(SERVER_CONNECT_ERROR_WAIT).await;
+                    continue;
+                }
+            };
+
+            while let Some(update) = protocol.check_update().await {
+                let mut guard = MESSAGES.lock().await;
+                let mut messages = RefCell::borrow_mut(&mut guard);
+
+                match update.kind {
+                    MessageUpdateKind::Text(text_size) => {
+                        let message = messages.next_available_text();
+                        message.set_meta(&update);
+                        unsafe {
+                            let message_buf = message.data.text.as_bytes_mut();
+                            protocol.request_update(&update, &mut message_buf[..text_size]).await;
+                            if core::str::from_utf8(&message_buf).is_err() {
+                                log::warn!("Received invalid utf8 from server");
+                                message_buf.fill(0)
+                            }
+                        }
+                    }
+                    MessageUpdateKind::Image => {
+                        let message = messages.next_available_image();
+                        message.set_meta(&update);
+                        let message_buf = message.data.image.as_mut();
+                        protocol.request_update(&update, message_buf).await;
+                    }
                 }
             }
+
+            Timer::after(MESSAGE_FETCH_INTERVAL).await;
         }
     }
 }

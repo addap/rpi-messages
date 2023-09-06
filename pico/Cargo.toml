@@ -49,4 +49,6 @@ pio = "0.2.1"
 rand = { version = "0.8.5", default-features = false }
 st7735-lcd = "0.9.0"
 
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+postcard = "1.0.7"
 

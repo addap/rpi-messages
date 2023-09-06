@@ -1,6 +1,8 @@
 use embassy_time::{Duration, Instant};
 use heapless::String;
 
+use crate::protocol::MessageUpdate;
+
 /// With margins we are able to fit 14 * 5 characters on one screen.
 /// a.d. TODO we could also do paging for longer messages, since we already need to infer linebreaks anyways.
 pub const TEXT_BUFFER_SIZE: usize = 70;
@@ -10,7 +12,7 @@ const TEXT_MESSAGE_NUM: usize = 10;
 pub const IMAGE_WIDTH: usize = 160;
 pub const IMAGE_HEIGHT: usize = 128;
 pub const IMAGE_BYTES_PER_PIXEL: usize = 2;
-const IMAGE_BUFFER_SIZE: usize = IMAGE_HEIGHT * IMAGE_WIDTH * IMAGE_BYTES_PER_PIXEL;
+pub const IMAGE_BUFFER_SIZE: usize = IMAGE_HEIGHT * IMAGE_WIDTH * IMAGE_BYTES_PER_PIXEL;
 const IMAGE_MESSAGE_NUM: usize = 2;
 
 pub trait MessageData {
@@ -56,26 +58,6 @@ where
     pub updated_at: Instant,
 }
 
-// impl<T: MessageData> PartialEq for Message<T> {
-//     fn eq(&self, other: &Self) -> bool {
-//         self.updated_at == other.updated_at
-//     }
-// }
-
-// impl<T: MessageData> Eq for Message<T> {}
-
-// impl<T: MessageData> PartialOrd for Message<T> {
-//     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-//         Some(self.cmp(other))
-//     }
-// }
-
-// impl<T: MessageData> Ord for Message<T> {
-//     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-//         self.updated_at
-//     }
-// }
-
 impl Message<TextData> {
     const fn new() -> Message<TextData> {
         Self {
@@ -103,6 +85,11 @@ where
     pub fn is_active(&self) -> bool {
         let now = Instant::now();
         now < self.updated_at + self.lifetime
+    }
+
+    pub fn set_meta(&mut self, update: &MessageUpdate) {
+        self.updated_at = Instant::now();
+        self.lifetime = Duration::from_secs(update.lifetime_sec);
     }
 }
 
