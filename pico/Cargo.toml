@@ -12,7 +12,7 @@ embassy-executor = { git = "https://github.com/embassy-rs/embassy.git", version 
 embassy-time = { git = "https://github.com/embassy-rs/embassy.git", version = "0.1.2", features = ["nightly", "unstable-traits", "defmt", "defmt-timestamp-uptime"] }
 embassy-rp = { git = "https://github.com/embassy-rs/embassy.git", version = "0.1.0", features = ["defmt", "unstable-traits", "nightly", "unstable-pac", "time-driver", "critical-section-impl"] }
 embassy-usb = { git = "https://github.com/embassy-rs/embassy.git", version = "0.1.0", features = ["defmt"] }
-embassy-net = { git = "https://github.com/embassy-rs/embassy.git", version = "0.1.0", features = ["defmt", "nightly", "tcp", "udp", "dhcpv4", "medium-ethernet"] }
+embassy-net = { git = "https://github.com/embassy-rs/embassy.git", version = "0.1.0", features = ["defmt", "nightly", "tcp", "udp", "dhcpv4" ] }
 embassy-net-wiznet = { git = "https://github.com/embassy-rs/embassy.git", version = "0.1.0", features = ["defmt"] }
 embassy-futures = { git = "https://github.com/embassy-rs/embassy.git", version = "0.1.0" }
 embassy-usb-logger = { git = "https://github.com/embassy-rs/embassy.git", version = "0.1.0" }

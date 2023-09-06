@@ -18,7 +18,7 @@ use embassy_embedded_hal::shared_bus::blocking::spi::{SpiDevice, SpiDeviceWithCo
 use embassy_executor::Spawner;
 use embassy_futures::yield_now;
 use embassy_net::tcp::TcpSocket;
-use embassy_net::{Config, Stack, StackResources};
+use embassy_net::{Config, IpAddress, IpEndpoint, Stack, StackResources};
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::pac::common::R;
 use embassy_rp::peripherals::{DMA_CH0, PIN_23, PIN_25, PIO0, USB};
@@ -26,33 +26,47 @@ use embassy_rp::spi::{Blocking, Spi};
 use embassy_rp::usb::Driver;
 use embassy_rp::{bind_interrupts, pio, spi, usb, Peripherals};
 use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
-use embassy_sync::blocking_mutex::Mutex;
-use embassy_time::{Delay, Duration, Timer};
+use embassy_sync::mutex::Mutex;
+use embassy_time::{Delay, Duration, Instant, Timer};
 use embedded_graphics::draw_target::DrawTarget;
-use embedded_graphics::image::{Image, ImageRawLE};
+use embedded_graphics::image::{Image, ImageRaw, ImageRawBE, ImageRawLE};
 use embedded_graphics::mono_font::ascii::FONT_10X20;
-use embedded_graphics::mono_font::MonoTextStyle;
+use embedded_graphics::mono_font::{self, MonoTextStyle};
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyleBuilder, Rectangle};
 use embedded_graphics::text::Text;
-use heapless::String;
-use rpi_messages_pico::messagebuf::{self, Messages};
+use rpi_messages_pico::messagebuf::{self, GenericMessage, Messages, IMAGE_WIDTH};
 use st7735_lcd::{Orientation, ST7735};
 use static_cell::make_static;
 use {defmt_rtt as _, panic_probe as _};
 
 const DISPLAY_FREQ: u32 = 10_000_000;
-const WIFI_NETWORK: &str = "Buffalo-G-1337";
-const WIFI_PASSWORD: &str = "hahagetfucked";
 
-static text: Mutex<CriticalSectionRawMutex, RefCell<Option<Messages>>> = Mutex::new(RefCell::new(None));
+const MESSAGE_DISPLAY_DURATION: Duration = Duration::from_secs(5);
+const MESSAGE_FONT: mono_font::MonoFont = FONT_10X20;
+const MESSAGE_TEXT_COLOR: Rgb565 = Rgb565::BLACK;
+const MESSAGE_CLEAR_COLOR: Rgb565 = Rgb565::WHITE;
+const MESSAGE_TEXT_STYLE: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&MESSAGE_FONT, MESSAGE_TEXT_COLOR);
 
+const WIFI_SSID: &str = env!("WIFI_SSID");
+const WIFI_PASSWORD: &str = env!("WIFI_PASSWORD");
+const SOCKET_TIMEOUT: Duration = Duration::from_secs(10);
+const SERVER_ENDPOINT: IpEndpoint = IpEndpoint::new(IpAddress::v4(192, 168, 12, 1), 1337);
+const MESSAGE_FETCH_INTERVAL: Duration = Duration::from_secs(60);
+
+static MESSAGES: Mutex<CriticalSectionRawMutex, RefCell<Messages>> = Mutex::new(RefCell::new(Messages::new()));
+
+// TODO why do we need this?
+// It seems to associate a type of interrupt that the CPU knows about with a handler (so maybe populating the interrupt vector?)
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => pio::InterruptHandler<PIO0>;
     USBCTRL_IRQ => usb::InterruptHandler<USB>;
 });
 
+//// ----- Some systems tasks for managing peripherals/debug. -----
+
+/// Interacts with the WIFI chip over some internal SPI.
 #[embassy_executor::task]
 async fn wifi_task(
     runner: cyw43::Runner<'static, Output<'static, PIN_23>, PioSpi<'static, PIN_25, PIO0, 0, DMA_CH0>>,
@@ -60,76 +74,83 @@ async fn wifi_task(
     runner.run().await
 }
 
+/// Manages the network stack (so I guess it handles connections, creating sockets and actually sending stuff over sockets).
 #[embassy_executor::task]
 async fn net_task(stack: &'static Stack<cyw43::NetDriver<'static>>) -> ! {
     stack.run().await
 }
 
+/// Sets the global logger and sends log messages over USB.
 #[embassy_executor::task]
 async fn logger_task(driver: Driver<'static, USB>) {
     embassy_usb_logger::run!(1024, log::LevelFilter::Info, driver);
 }
 
-#[embassy_executor::task]
-async fn get_data_task(
-    stack: &'static Stack<cyw43::NetDriver<'static>>,
-    control: &'static mut Control<'static>,
-    // text: &'static Mutex<NoopRawMutex, RefCell<Messages>>,
-) {
-    // And now we can use it!
+//// ----- Main tasks to implement the device features. -----
 
+/// This task connects to `MESSAGE_SERVER_ADDR` and fetches new messages to update the global `MESSAGES` struct.
+///
+/// - `stack`: the network stack. Used to create sockets.
+/// - `control`: a driver for the WIFI chip. TODO usage not clear.
+#[embassy_executor::task]
+async fn fetch_data_task(stack: &'static Stack<cyw43::NetDriver<'static>>, control: &'static mut Control<'static>) {
     let mut rx_buffer = [0; 4096];
     let mut tx_buffer = [0; 4096];
     let mut buf = [0; 4096];
 
     loop {
         let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
-        socket.set_timeout(Some(Duration::from_secs(10)));
+        socket.set_timeout(Some(SOCKET_TIMEOUT));
 
+        // TODO what does setting the gpio here do?
         control.gpio_set(1, false).await;
-        log::info!("Listening on TCP:1234...");
-        if let Err(e) = socket.accept(1234).await {
-            log::warn!("accept error: {:?}", e);
+        log::info!("Connecting to server: {}", SERVER_ENDPOINT);
+        if let Err(e) = socket.connect(SERVER_ENDPOINT).await {
+            log::warn!("connect error: {:?}", e);
             continue;
         }
-
-        log::info!("Received connection from {:?}", socket.remote_endpoint());
         control.gpio_set(0, true).await;
 
-        loop {
-            let n = match socket.read(&mut buf).await {
-                Ok(0) => {
-                    log::warn!("read EOF");
-                    break;
-                }
-                Ok(n) => n,
-                Err(e) => {
-                    log::warn!("read error: {:?}", e);
-                    break;
-                }
-            };
+        // TODO send a command to server to fetch new messages. (Maybe give timestamp of last received message, or some counter?)
+        // Then read reply and receive an arbitrary amount of messages and save them to MESSAGES
+        // The order is:
+        //   - read meta message from server to know if image or text follows.
+        //   - lock MESSAGES, get next message buffer and read from socket.
+        //   - repeat
+        let n = match socket.read(&mut buf).await {
+            Ok(0) => {
+                log::warn!("read EOF");
+                break;
+            }
+            Ok(n) => n,
+            Err(e) => {
+                log::warn!("read error: {:?}", e);
+                break;
+            }
+        };
 
-            log::info!("rxd {}", from_utf8(&buf[..n]).unwrap());
-            // yield_now().await;
+        log::info!("rxd {}", from_utf8(&buf[..n]).unwrap());
 
-            log::info!("get_data: before lock mutex");
-            text.lock(|rc| {
-                log::info!("get_data: after lock mutex");
-                let mut x = rc.borrow_mut();
-                log::info!("get_data: after borrow rc");
-                let x3 = x.as_mut().unwrap();
-                log::info!("get_data: after unwrap messages");
-                let x2 = x3.next_text();
-                x2.data.text.clear();
-                for &c in buf[..n].iter().take(32) {
-                    x2.data.text.push(c as char).unwrap();
+        {
+            let mut guard = MESSAGES.lock().await;
+            let mut messages = RefCell::borrow_mut(&mut guard);
+            let message = messages.next_available_text();
+            unsafe {
+                let text_buf = message.data.text.as_bytes_mut();
+                socket.read(text_buf).await.unwrap();
+                if let Err(_) = core::str::from_utf8(text_buf) {
+                    log::warn!("Received invalid utf8 from server");
+                    text_buf.fill(0)
                 }
-                log::info!("get_data: after write string");
-            });
+            }
         }
     }
 }
 
+/// This task reads messages from the global `MESSAGES` struct and displays a new one every `MESSAGE_DURATION` seconds.
+/// TODO add some queue for status messages (wifi problems, can't find server, etc.) which have priority over `MESSAGES`.
+///
+/// - `display`: a driver to interact with the display's ST7735 chip over SPI.
 #[embassy_executor::task]
 async fn display_messages_task(
     display: &'static mut ST7735<
@@ -137,31 +158,34 @@ async fn display_messages_task(
         Output<'_, embassy_rp::peripherals::PIN_8>,
         Output<'_, embassy_rp::peripherals::PIN_12>,
     >,
-    // text: &'static Mutex<NoopRawMutex, RefCell<Messages>>,
 ) {
-    let style = MonoTextStyle::new(&FONT_10X20, Rgb565::GREEN);
-    let mut idx = 0;
+    let mut last_message_time = Instant::MIN;
 
     loop {
-        log::info!("display_messages: before lock mutex");
-        text.lock(|rc| {
-            log::info!("display_messages: after lock mutex");
-            let x = rc.borrow();
-            let x3 = x.as_ref().unwrap();
-            log::info!("display_messages: after unwrap messages");
-            let x2 = x3.texts.get(idx).unwrap();
+        {
+            let guard = MESSAGES.lock().await;
+            let messages = RefCell::borrow(&guard);
+            let next_message = messages.next_display_message_generic(last_message_time);
+            last_message_time = next_message.updated_at();
 
-            log::info!("{}", x2.data.text.as_str());
-            Text::new(x2.data.text.as_str(), Point::new(20, 100), style)
-                .draw(display)
-                .unwrap();
-            idx += 1;
-            if idx == x3.texts.len() {
-                idx = 0;
+            match next_message {
+                GenericMessage::Text(text) => {
+                    log::info!("{}", text.data.text.as_str());
+
+                    // TODO add logic to add linebreaks/margins
+                    Text::new(text.data.text.as_str(), Point::new(20, 100), MESSAGE_TEXT_STYLE)
+                        .draw(display)
+                        .unwrap();
+                }
+                GenericMessage::Image(image) => {
+                    let raw: ImageRawBE<Rgb565> = ImageRaw::new(&image.data.image, IMAGE_WIDTH as u32);
+                    Image::new(&raw, Point::zero()).draw(display).unwrap();
+                }
             }
-        });
-        Timer::after(Duration::from_secs(1)).await;
-        display.clear(Rgb565::RED).unwrap();
+        }
+
+        Timer::after(MESSAGE_DISPLAY_DURATION).await;
+        display.clear(MESSAGE_CLEAR_COLOR).unwrap();
     }
 }
 
@@ -173,16 +197,6 @@ async fn main(spawner: Spawner) {
     let driver = Driver::new(p.USB, Irqs);
     spawner.spawn(logger_task(driver)).unwrap();
     log::info!("Hello World!");
-
-    // let messages = Messages::new();
-    // let text: &Mutex<NoopRawMutex, _> = make_static!(Mutex::new(RefCell::new(messages)));
-
-    {
-        text.lock(|rc| {
-            let mut x = rc.borrow_mut();
-            *x = Some(Messages::new());
-        });
-    }
 
     //////////////////  WIFI
     {
@@ -225,7 +239,7 @@ async fn main(spawner: Spawner) {
 
         loop {
             //control.join_open(WIFI_NETWORK).await;
-            match control.join_wpa2(WIFI_NETWORK, WIFI_PASSWORD).await {
+            match control.join_wpa2(WIFI_SSID, WIFI_PASSWORD).await {
                 Ok(_) => break,
                 Err(err) => {
                     log::info!("join failed with status={}", err.status);
@@ -234,7 +248,7 @@ async fn main(spawner: Spawner) {
         }
 
         let scontrol = make_static!(control);
-        spawner.spawn(get_data_task(stack, scontrol)).unwrap();
+        spawner.spawn(fetch_data_task(stack, scontrol)).unwrap();
     }
     ///////////////////////// WIFI
 
