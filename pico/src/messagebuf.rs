@@ -1,18 +1,12 @@
 use embassy_time::{Duration, Instant};
 use heapless::String;
-
-use crate::protocol::MessageUpdate;
+use rpi_messages_common::{MessageUpdate, IMAGE_BUFFER_SIZE};
 
 /// With margins we are able to fit 14 * 5 characters on one screen.
 /// a.d. TODO we could also do paging for longer messages, since we already need to infer linebreaks anyways.
 pub const TEXT_BUFFER_SIZE: usize = 70;
 const TEXT_MESSAGE_NUM: usize = 10;
 
-/// We save images raw (TODO which endian-ness) so we use the exact screen dimensions.
-pub const IMAGE_WIDTH: usize = 160;
-pub const IMAGE_HEIGHT: usize = 128;
-pub const IMAGE_BYTES_PER_PIXEL: usize = 2;
-pub const IMAGE_BUFFER_SIZE: usize = IMAGE_HEIGHT * IMAGE_WIDTH * IMAGE_BYTES_PER_PIXEL;
 const IMAGE_MESSAGE_NUM: usize = 2;
 
 pub trait MessageData {

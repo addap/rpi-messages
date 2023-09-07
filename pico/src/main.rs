@@ -7,38 +7,30 @@
 #![no_main]
 #![feature(type_alias_impl_trait)]
 
-use core::borrow::BorrowMut;
-use core::cell::{RefCell, RefMut};
-use core::str::from_utf8;
+use core::cell::RefCell;
 
-use cortex_m::asm::wfe;
 use cyw43::Control;
 use cyw43_pio::PioSpi;
-use embassy_embedded_hal::shared_bus::blocking::spi::{SpiDevice, SpiDeviceWithConfig};
 use embassy_executor::Spawner;
-use embassy_futures::yield_now;
-use embassy_net::tcp::TcpSocket;
-use embassy_net::udp::UdpSocket;
-use embassy_net::{Config, IpAddress, IpEndpoint, Stack, StackResources};
+use embassy_net::{Config, Stack, StackResources};
 use embassy_rp::gpio::{Level, Output};
-use embassy_rp::pac::common::R;
 use embassy_rp::peripherals::{DMA_CH0, PIN_23, PIN_25, PIO0, USB};
 use embassy_rp::spi::{Blocking, Spi};
 use embassy_rp::usb::Driver;
-use embassy_rp::{bind_interrupts, pio, spi, usb, Peripherals};
-use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
+use embassy_rp::{bind_interrupts, pio, spi, usb};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::mutex::Mutex;
 use embassy_time::{Delay, Duration, Instant, Timer};
 use embedded_graphics::draw_target::DrawTarget;
-use embedded_graphics::image::{Image, ImageRaw, ImageRawBE, ImageRawLE};
+use embedded_graphics::image::{Image, ImageRaw, ImageRawBE};
 use embedded_graphics::mono_font::ascii::FONT_10X20;
 use embedded_graphics::mono_font::{self, MonoTextStyle};
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::{PrimitiveStyleBuilder, Rectangle};
 use embedded_graphics::text::Text;
-use rpi_messages_pico::messagebuf::{self, GenericMessage, Messages, IMAGE_BUFFER_SIZE, IMAGE_WIDTH};
-use rpi_messages_pico::protocol::{ClientCommand, MessageUpdateKind, Protocol};
+use rpi_messages_common::{MessageUpdateKind, IMAGE_WIDTH};
+use rpi_messages_pico::messagebuf::{GenericMessage, Messages};
+use rpi_messages_pico::protocol::Protocol;
 use st7735_lcd::{Orientation, ST7735};
 use static_cell::make_static;
 use {defmt_rtt as _, panic_probe as _};
@@ -188,12 +180,14 @@ async fn display_messages_task(
 async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
 
-    // USB logging
-    let driver = Driver::new(p.USB, Irqs);
-    spawner.spawn(logger_task(driver)).unwrap();
-    log::info!("Hello World!");
+    // ----- USB logging setup -----
+    {
+        let driver = Driver::new(p.USB, Irqs);
+        spawner.spawn(logger_task(driver)).unwrap();
+        log::info!("Hello World!");
+    }
 
-    //////////////////  WIFI
+    // ----- WIFI setup -----
     {
         let fw = include_bytes!("../cyw43-firmware/43439A0.bin");
         let clm = include_bytes!("../cyw43-firmware/43439A0_clm.bin");
@@ -213,17 +207,11 @@ async fn main(spawner: Spawner) {
             .await;
 
         let config = Config::dhcpv4(Default::default());
-        //let config = embassy_net::Config::ipv4_static(embassy_net::StaticConfigV4 {
-        //    address: Ipv4Cidr::new(Ipv4Address::new(192, 168, 69, 2), 24),
-        //    dns_servers: Vec::new(),
-        //    gateway: Some(Ipv4Address::new(192, 168, 69, 1)),
-        //});
 
-        // Generate random seed
-        let seed = 0x0123_4567_89ab_cdef; // chosen by fair dice roll. guarenteed to be random.
+        let seed = 0x0981_a34b_8288_01ff;
 
         // Init network stack
-        let stack = &*make_static!(Stack::new(
+        let stack = make_static!(Stack::new(
             net_device,
             config,
             make_static!(StackResources::<2>::new()),
@@ -233,7 +221,6 @@ async fn main(spawner: Spawner) {
         spawner.spawn(net_task(stack)).unwrap();
 
         loop {
-            //control.join_open(WIFI_NETWORK).await;
             match control.join_wpa2(WIFI_SSID, WIFI_PASSWORD).await {
                 Ok(_) => break,
                 Err(err) => {
@@ -242,56 +229,45 @@ async fn main(spawner: Spawner) {
             }
         }
 
-        let scontrol = make_static!(control);
-        spawner.spawn(fetch_data_task(stack, scontrol)).unwrap();
+        spawner.spawn(fetch_data_task(stack, make_static!(control))).unwrap();
     }
-    ///////////////////////// WIFI
 
-    let bl = p.PIN_13;
-    let rst = p.PIN_12;
-    let display_cs = p.PIN_9;
-    let dcx = p.PIN_8;
-    let mosi = p.PIN_11;
-    let clk = p.PIN_10;
+    // ----- Display setup -----
+    {
+        let bl = p.PIN_13;
+        let rst = p.PIN_12;
+        let display_cs = p.PIN_9;
+        let dcx = p.PIN_8;
+        let mosi = p.PIN_11;
+        let clk = p.PIN_10;
 
-    // let pinv = [dcx, mosi];
+        // create SPI
+        let mut display_config = spi::Config::default();
+        display_config.frequency = DISPLAY_FREQ;
 
-    // create SPI
-    let mut display_config = spi::Config::default();
-    display_config.frequency = DISPLAY_FREQ;
+        // we only have one SPI device so we don't need the SPI bus/SPIDevice machinery.
+        let spi: Spi<'_, _, Blocking> = Spi::new_blocking_txonly(p.SPI1, clk, mosi, display_config.clone());
 
-    let spi: Spi<'_, _, Blocking> = Spi::new_blocking_txonly(p.SPI1, clk, mosi, display_config.clone());
-    // let spi_bus: Mutex<NoopRawMutex, _> = Mutex::new(RefCell::new(spi));
+        // dcx: 0 = command, 1 = data
+        let dcx = Output::new(dcx, Level::Low);
+        let rst = Output::new(rst, Level::Low);
+        // Not used afterwards but we initialize it because it should always be low.
+        let _ = Output::new(display_cs, Level::Low);
 
-    // let display_spi = SpiDevice::new(&spi_bus, Output::new(display_cs, Level::High));
-    // let touch_spi = SpiDeviceWithConfig::new(&spi_bus, Output::new(touch_cs, Level::High), touch_config);
+        // Enable LCD backlight
+        // TODO Use PWM to regulate
+        let _ = Output::new(bl, Level::High);
 
-    // let mut touch = Touch::new(touch_spi);
+        // Create display driver which takes care of sending messages to the display.
+        let mut display = ST7735::new(spi, dcx, rst, true, false, 160, 128);
 
-    // dcx: 0 = command, 1 = data
-    let dcx = Output::new(dcx, Level::Low);
-    let rst = Output::new(rst, Level::Low);
-    // should always be low
-    let display_cs = Output::new(display_cs, Level::Low);
+        display.init(&mut Delay).unwrap();
+        display.set_orientation(&Orientation::Landscape).unwrap();
+        // ST7735 is a 162 * 132 controller but it's connected to a 160 * 128 LCD, so we need to set an offset.
+        display.set_offset(1, 2);
 
-    // Enable LCD backlight
-    // Use PWN to regulate
-    let _bl = Output::new(bl, Level::High);
+        display.clear(Rgb565::RED).unwrap();
 
-    // display interface abstraction from SPI and DC
-    // let di = SPIDeviceInterface::new(display_spi, dcx);
-
-    // create driver
-    let mut display = ST7735::new(spi, dcx, rst, true, false, 160, 128);
-
-    // initialize
-    display.init(&mut Delay).unwrap();
-
-    // set default orientation
-    display.set_orientation(&Orientation::Landscape).unwrap();
-    display.set_offset(1, 2);
-
-    display.clear(Rgb565::RED).unwrap();
-
-    spawner.spawn(display_messages_task(make_static!(display))).unwrap();
+        spawner.spawn(display_messages_task(make_static!(display))).unwrap();
+    }
 }

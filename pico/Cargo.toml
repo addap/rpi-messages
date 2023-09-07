@@ -6,6 +6,7 @@ license = "MIT OR Apache-2.0"
 
 
 [dependencies]
+rpi-messages-common = { path = "../common" }
 embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy.git", version = "0.1.0", features = ["defmt"] }
 embassy-sync = { git = "https://github.com/embassy-rs/embassy.git", version = "0.2.0", features = ["defmt"] }
 embassy-executor = { git = "https://github.com/embassy-rs/embassy.git", version = "0.3.0", features = ["nightly", "arch-cortex-m", "executor-thread", "executor-interrupt", "defmt", "integrated-timers"] }

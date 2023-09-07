@@ -8,14 +8,13 @@ use embassy_net::{IpAddress, IpEndpoint, Stack};
 use embassy_time::Duration;
 use postcard::ser_flavors::Size;
 use postcard::serialize_with_flavor;
-use serde::{Deserialize, Serialize};
-
-use crate::messagebuf::IMAGE_BUFFER_SIZE;
+use rpi_messages_common::{ClientCommand, MessageUpdate, IMAGE_BUFFER_SIZE};
 
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(10);
 const SERVER_ENDPOINT: IpEndpoint = IpEndpoint::new(IpAddress::v4(192, 168, 12, 1), 1337);
-
 const USIZE: usize = mem::size_of::<usize>();
+const MESSAGE_UPDATE_SIZE: usize = mem::size_of::<Option<MessageUpdate>>();
+const COMMAND_BUF_SIZE: usize = 32;
 
 // rx_buffer must be large enough to hold a whole image, or alternatively we do streaming.
 static mut RX_BUFFER: [u8; IMAGE_BUFFER_SIZE] = [0; IMAGE_BUFFER_SIZE];
@@ -44,54 +43,38 @@ impl<'a> Protocol<'a> {
     }
 
     pub async fn check_update(&mut self) -> Option<MessageUpdate> {
-        let mut command_buf = [9u8; 256];
-        let command_buf = ClientCommand::CheckUpdate.prepare_command(&mut command_buf);
+        let mut command_buf = [0u8; COMMAND_BUF_SIZE];
+        let command_buf = serialize_client_command(&ClientCommand::CheckUpdate, &mut command_buf);
 
         self.socket.write(&command_buf).await.unwrap();
 
-        let mut update_size = [0u8; USIZE];
-        self.socket.read(&mut update_size).await.unwrap();
-        let update_size = usize::from_be_bytes(update_size);
-        let mut buf = [0u8; mem::size_of::<Option<MessageUpdate>>()];
-        self.socket.read(&mut buf[..update_size]).await.unwrap();
+        // a.d. TODO I wanted to abstract the parsing of a server reply out to a function with a T : Deserialize + ?Sized, but mem::size_of apparently does not work with generic types.
+        let mut reply_size = [0u8; USIZE];
+        self.socket.read(&mut reply_size).await.unwrap();
+        let reply_size = usize::from_be_bytes(reply_size);
+        debug_assert!(reply_size <= MESSAGE_UPDATE_SIZE);
+        let mut buf = [0u8; MESSAGE_UPDATE_SIZE];
+        self.socket.read(&mut buf[..reply_size]).await.unwrap();
 
         postcard::from_bytes(&buf).unwrap()
     }
 
     pub async fn request_update(&mut self, update: &MessageUpdate, message_buf: &mut [u8]) {
-        let mut command_buf = [9u8; 256];
-        let command_buf = ClientCommand::RequestUpdate(update.uuid).prepare_command(&mut command_buf);
+        debug_assert!(message_buf.len() >= update.kind.size());
+
+        let mut command_buf = [0u8; COMMAND_BUF_SIZE];
+        let command_buf = serialize_client_command(&ClientCommand::RequestUpdate(update.uuid), &mut command_buf);
 
         self.socket.write(&command_buf).await.unwrap();
         self.socket.read(message_buf).await.unwrap();
     }
 }
 
-#[derive(Clone, Copy, Serialize, Deserialize)]
-pub enum MessageUpdateKind {
-    Text(usize),
-    Image,
-}
+fn serialize_client_command<'a>(command: &ClientCommand, command_buf: &'a mut [u8; COMMAND_BUF_SIZE]) -> &'a [u8] {
+    let command_size = serialize_with_flavor(command, Size::default()).unwrap();
+    debug_assert!(command_size < mem::size_of::<ClientCommand>());
+    debug_assert!(command_size + USIZE < COMMAND_BUF_SIZE);
 
-#[derive(Serialize, Deserialize)]
-pub struct MessageUpdate {
-    pub lifetime_sec: u64,
-    pub kind: MessageUpdateKind,
-    uuid: u64,
-}
-
-#[derive(Clone, Copy, Serialize, Deserialize)]
-pub enum ClientCommand {
-    CheckUpdate,
-    RequestUpdate(u64),
-}
-
-impl ClientCommand {
-    fn prepare_command(self, command_buf: &mut [u8]) -> &mut [u8] {
-        let command_size = serialize_with_flavor(&self, Size::default()).unwrap();
-        debug_assert!(command_size < mem::size_of::<ClientCommand>());
-
-        command_buf[..USIZE].copy_from_slice(&command_size.to_be_bytes());
-        postcard::to_slice(&self, command_buf).unwrap()
-    }
+    command_buf[..USIZE].copy_from_slice(&command_size.to_be_bytes());
+    postcard::to_slice(command, &mut command_buf[USIZE..]).unwrap()
 }
