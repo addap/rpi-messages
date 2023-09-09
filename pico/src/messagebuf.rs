@@ -1,12 +1,10 @@
 use embassy_time::{Duration, Instant};
 use heapless::String;
-use rpi_messages_common::{MessageUpdate, IMAGE_BUFFER_SIZE};
+use rpi_messages_common::{MessageUpdate, IMAGE_BUFFER_SIZE, TEXT_BUFFER_SIZE};
 
 /// With margins we are able to fit 14 * 5 characters on one screen.
 /// a.d. TODO we could also do paging for longer messages, since we already need to infer linebreaks anyways.
-pub const TEXT_BUFFER_SIZE: usize = 70;
 const TEXT_MESSAGE_NUM: usize = 10;
-
 const IMAGE_MESSAGE_NUM: usize = 2;
 
 pub trait MessageData {
@@ -83,7 +81,7 @@ where
 
     pub fn set_meta(&mut self, update: &MessageUpdate) {
         self.updated_at = Instant::now();
-        self.lifetime = Duration::from_secs(update.lifetime_sec);
+        self.lifetime = Duration::from_secs(update.lifetime_sec.into());
     }
 }
 

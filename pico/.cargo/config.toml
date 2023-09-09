@@ -8,6 +8,6 @@ target = "thumbv6m-none-eabi"        # Cortex-M0 and Cortex-M0+
 runner = "elf2uf2-rs -d"
 
 [env]
-DEFMT_LOG = "debug"
+#DEFMT_LOG = "debug"
 WIFI_SSID = "Buffalo-G-1337"
 WIFI_PASSWORD = "mysecretpw"

@@ -28,12 +28,12 @@ use embedded_graphics::mono_font::{self, MonoTextStyle};
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
 use embedded_graphics::text::Text;
-use rpi_messages_common::{MessageUpdateKind, IMAGE_WIDTH};
+use panic_probe as _;
+use rpi_messages_common::{MessageUpdateKind, UpdateResult, IMAGE_WIDTH};
 use rpi_messages_pico::messagebuf::{GenericMessage, Messages};
 use rpi_messages_pico::protocol::Protocol;
 use st7735_lcd::{Orientation, ST7735};
 use static_cell::make_static;
-use {defmt_rtt as _, panic_probe as _};
 
 const DISPLAY_FREQ: u32 = 10_000_000;
 
@@ -78,7 +78,7 @@ async fn net_task(stack: &'static Stack<cyw43::NetDriver<'static>>) -> ! {
 /// Sets the global logger and sends log messages over USB.
 #[embassy_executor::task]
 async fn logger_task(driver: Driver<'static, USB>) {
-    embassy_usb_logger::run!(1024, log::LevelFilter::Info, driver);
+    embassy_usb_logger::run!(1024, log::LevelFilter::Debug, driver);
 }
 
 //// ----- Main tasks to implement the device features. -----
@@ -92,45 +92,63 @@ async fn fetch_data_task(stack: &'static Stack<cyw43::NetDriver<'static>>, contr
     let mut tx_buffer = [0; 256];
 
     loop {
+        // Nested block to drop protocol before we await the timeout.
         {
-            let protocol_res = Protocol::new(stack, control, &mut tx_buffer).await;
-            let mut protocol = match protocol_res {
-                Ok(protocol) => protocol,
-                Err(e) => {
-                    log::warn!("Connection error: {:?}", e);
-                    Timer::after(SERVER_CONNECT_ERROR_WAIT).await;
-                    continue;
-                }
-            };
+            log::info!("Creating new connection.");
+            // let protocol_res = Protocol::new(stack, control, &mut tx_buffer).await;
+            // let mut protocol = match protocol_res {
+            //     Ok(protocol) => protocol,
+            //     Err(e) => {
+            //         log::warn!("Connection error: {:?}", e);
+            //         Timer::after(SERVER_CONNECT_ERROR_WAIT).await;
+            //         continue;
+            //     }
+            // };
 
-            while let Some(update) = protocol.check_update().await {
-                let mut guard = MESSAGES.lock().await;
-                let mut messages = RefCell::borrow_mut(&mut guard);
+            // loop {
+            //     log::info!("Checking for updates");
+            //     match protocol.check_update().await {
+            //         None => {
+            //             log::warn!("update parse error");
+            //             break;
+            //         }
+            //         Some(UpdateResult::NoUpdate) => {
+            //             log::info!("No updates for now. Sleeping.");
+            //             break;
+            //         }
+            //         Some(UpdateResult::Update(update)) => {
+            //             log::info!("Received an update. Acquiring mutex to change message buffer.");
+            //             let mut guard = MESSAGES.lock().await;
+            //             let mut messages = RefCell::borrow_mut(&mut guard);
 
-                match update.kind {
-                    MessageUpdateKind::Text(text_size) => {
-                        let message = messages.next_available_text();
-                        message.set_meta(&update);
-                        unsafe {
-                            let message_buf = message.data.text.as_bytes_mut();
-                            protocol.request_update(&update, &mut message_buf[..text_size]).await;
-                            if core::str::from_utf8(&message_buf).is_err() {
-                                log::warn!("Received invalid utf8 from server");
-                                message_buf.fill(0)
-                            }
-                        }
-                    }
-                    MessageUpdateKind::Image => {
-                        let message = messages.next_available_image();
-                        message.set_meta(&update);
-                        let message_buf = message.data.image.as_mut();
-                        protocol.request_update(&update, message_buf).await;
-                    }
-                }
-            }
-
-            Timer::after(MESSAGE_FETCH_INTERVAL).await;
+            //             match update.kind {
+            //                 MessageUpdateKind::Text(_) => {
+            //                     log::info!("Requesting text update.");
+            //                     let message = messages.next_available_text();
+            //                     message.set_meta(&update);
+            //                     unsafe {
+            //                         let message_buf = message.data.text.as_bytes_mut();
+            //                         protocol.request_update(&update, message_buf).await;
+            //                         if core::str::from_utf8(&message_buf).is_err() {
+            //                             log::warn!("Received invalid utf8 from server");
+            //                             message_buf.fill(0)
+            //                         }
+            //                     }
+            //                 }
+            //                 MessageUpdateKind::Image => {
+            //                     log::info!("Requesting image update.");
+            //                     let message = messages.next_available_image();
+            //                     message.set_meta(&update);
+            //                     let message_buf = message.data.image.as_mut();
+            //                     protocol.request_update(&update, message_buf).await;
+            //                 }
+            //             }
+            //         }
+            //     }
+            // }
         }
+
+        Timer::after(MESSAGE_FETCH_INTERVAL).await;
     }
 }
 
@@ -147,46 +165,85 @@ async fn display_messages_task(
     >,
 ) {
     let mut last_message_time = Instant::MIN;
+    let mut i = 0;
 
     loop {
-        {
-            let guard = MESSAGES.lock().await;
-            let messages = RefCell::borrow(&guard);
-            let next_message = messages.next_display_message_generic(last_message_time);
-            last_message_time = next_message.updated_at();
+        // {
+        log::info!("Acquiring mutex to read message buffer.");
+        //     let guard = MESSAGES.lock().await;
+        //     let messages = RefCell::borrow(&guard);
+        //     let next_message = messages.next_display_message_generic(last_message_time);
+        //     last_message_time = next_message.updated_at();
 
-            match next_message {
-                GenericMessage::Text(text) => {
-                    log::info!("{}", text.data.text.as_str());
+        //     match next_message {
+        //         GenericMessage::Text(text) => {
+        //             log::info!("Showing a text message: {}", text.data.text.as_str());
 
-                    // TODO add logic to add linebreaks/margins
-                    Text::new(text.data.text.as_str(), Point::new(20, 100), MESSAGE_TEXT_STYLE)
-                        .draw(display)
-                        .unwrap();
-                }
-                GenericMessage::Image(image) => {
-                    let raw: ImageRawBE<Rgb565> = ImageRaw::new(&image.data.image, IMAGE_WIDTH as u32);
-                    Image::new(&raw, Point::zero()).draw(display).unwrap();
-                }
-            }
-        }
+        //             // TODO add logic to add linebreaks/margins
+        //             Text::new(text.data.text.as_str(), Point::new(20, 100), MESSAGE_TEXT_STYLE)
+        //                 .draw(display)
+        //                 .unwrap();
+        //         }
+        //         GenericMessage::Image(image) => {
+        //             log::info!("Showing an image message.");
+        //             let raw: ImageRawBE<Rgb565> = ImageRaw::new(&image.data.image, IMAGE_WIDTH as u32);
+        //             Image::new(&raw, Point::zero()).draw(display).unwrap();
+        //         }
+        //     }
+        // }
+
+        i += 1;
 
         Timer::after(MESSAGE_DISPLAY_DURATION).await;
-        display.clear(MESSAGE_CLEAR_COLOR).unwrap();
+
+        match i % 5 {
+            0 => {
+                if let Err(e) = display.clear(Rgb565::BLUE) {
+                    log::warn!("Error {:?}", e);
+                }
+            }
+            1 => {
+                if let Err(e) = display.clear(Rgb565::RED) {
+                    log::warn!("Error {:?}", e);
+                }
+            }
+            2 => {
+                if let Err(e) = display.clear(Rgb565::YELLOW) {
+                    log::warn!("Error {:?}", e);
+                }
+            }
+            3 => {
+                if let Err(e) = display.clear(Rgb565::GREEN) {
+                    log::warn!("Error {:?}", e);
+                }
+            }
+            4 => {
+                if let Err(e) = display.clear(Rgb565::MAGENTA) {
+                    log::warn!("Error {:?}", e);
+                }
+            }
+            _ => {}
+        }
+
+        Timer::after(Duration::from_secs(1)).await;
     }
 }
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
+    // log::info!("1");
 
     // ----- USB logging setup -----
     {
         let driver = Driver::new(p.USB, Irqs);
         spawner.spawn(logger_task(driver)).unwrap();
+
+        Timer::after(Duration::from_secs(5)).await;
         log::info!("Hello World!");
     }
 
+    log::info!("2");
     // ----- WIFI setup -----
     {
         let fw = include_bytes!("../cyw43-firmware/43439A0.bin");
@@ -218,17 +275,23 @@ async fn main(spawner: Spawner) {
             seed
         ));
 
+        log::info!("3");
         spawner.spawn(net_task(stack)).unwrap();
+        log::info!("4");
 
         loop {
             match control.join_wpa2(WIFI_SSID, WIFI_PASSWORD).await {
-                Ok(_) => break,
+                Ok(_) => {
+                    log::info!("join suceeded {}", "what?");
+                    break;
+                }
                 Err(err) => {
                     log::info!("join failed with status={}", err.status);
                 }
             }
         }
 
+        log::info!("5");
         spawner.spawn(fetch_data_task(stack, make_static!(control))).unwrap();
     }
 
@@ -245,9 +308,11 @@ async fn main(spawner: Spawner) {
         let mut display_config = spi::Config::default();
         display_config.frequency = DISPLAY_FREQ;
 
+        log::info!("6");
         // we only have one SPI device so we don't need the SPI bus/SPIDevice machinery.
         let spi: Spi<'_, _, Blocking> = Spi::new_blocking_txonly(p.SPI1, clk, mosi, display_config.clone());
 
+        log::info!("7");
         // dcx: 0 = command, 1 = data
         let dcx = Output::new(dcx, Level::Low);
         let rst = Output::new(rst, Level::Low);
@@ -261,13 +326,17 @@ async fn main(spawner: Spawner) {
         // Create display driver which takes care of sending messages to the display.
         let mut display = ST7735::new(spi, dcx, rst, true, false, 160, 128);
 
+        log::info!("8");
         display.init(&mut Delay).unwrap();
         display.set_orientation(&Orientation::Landscape).unwrap();
         // ST7735 is a 162 * 132 controller but it's connected to a 160 * 128 LCD, so we need to set an offset.
         display.set_offset(1, 2);
+        log::info!("9");
 
-        display.clear(Rgb565::RED).unwrap();
+        display.clear(Rgb565::GREEN).unwrap();
+        log::info!("10");
 
-        spawner.spawn(display_messages_task(make_static!(display))).unwrap();
+        // spawner.spawn(display_messages_task(make_static!(display))).unwrap();
     }
+    log::info!("Finished configuration.");
 }
