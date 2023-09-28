@@ -55,7 +55,6 @@ static MESSAGES: Mutex<CriticalSectionRawMutex, RefCell<Messages>> = Mutex::new(
 
 static mut fb: [u8; IMAGE_BUFFER_SIZE] = [0u8; IMAGE_BUFFER_SIZE];
 
-// static imo: &'static [u8; IMAGE_BUFFER_SIZE] = include_bytes!("../../../pictures/loveimo.bin");
 static imo: &'static [u8; IMAGE_BUFFER_SIZE] = include_bytes!("../../../pictures/loveimo.bin");
 
 // TODO why do we need this?
@@ -188,9 +187,6 @@ async fn display_messages_task(
         //             log::info!("Showing a text message: {}", text.data.text.as_str());
 
         //             // TODO add logic to add linebreaks/margins
-        //             Text::new(text.data.text.as_str(), Point::new(20, 100), MESSAGE_TEXT_STYLE)
-        //                 .draw(display)
-        //                 .unwrap();
         //         }
         //         GenericMessage::Image(image) => {
         //             log::info!("Showing an image message.");
@@ -202,36 +198,26 @@ async fn display_messages_task(
 
         // Timer::after(MESSAGE_DISPLAY_DURATION).await;
 
+        match i % 3 {
+            0 => display.clear(Rgb565::YELLOW),
+            1 => display.clear(Rgb565::GREEN),
+            2 => display.clear(Rgb565::BLUE),
+            _ => unreachable!(),
+        };
+
         i += 1;
 
-        match i % 5 {
-            0 => {
-                display.clear(Rgb565::BLUE);
-            }
-            1 => {
-                display.clear(Rgb565::RED);
-            }
-            2 => {
-                display.clear(Rgb565::YELLOW);
-            }
-            3 => {
-                display.clear(Rgb565::GREEN);
-            }
-            4 => {
-                display.clear(Rgb565::MAGENTA);
-            }
-            _ => {}
-        }
-        display.show();
+        Text::new("Hello", Point::new(20, 100), MESSAGE_TEXT_STYLE)
+            .draw(display)
+            .unwrap();
 
-        Timer::after(Duration::from_secs(2)).await;
+        Timer::after(Duration::from_secs(3)).await;
     }
 }
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
-    // log::info!("1");
 
     // ----- USB logging setup -----
     {
@@ -319,40 +305,32 @@ async fn main(spawner: Spawner) {
         // dcx: 0 = command, 1 = data
         let dcx = Output::new(dcx, Level::Low);
         let rst = Output::new(rst, Level::Low);
-        // Not used afterwards but we initialize it because it should always be low.
         let display_cs = Output::new(display_cs, Level::Low);
         // Enable LCD backlight
         // TODO Use PWM to regulate
         let bl = Output::new(bl, Level::High);
 
+        // let mut display = ST7735::new(spi, dcx, rst, true, false, 160, 128);
+        // // display.init(&mut Delay).unwrap();
+        // display.set_orientation(&Orientation::Landscape).unwrap();
+        // display.set_offset(1, 2);
+        // display.clear(Rgb565::RED).unwrap();
+
         // Create display driver which takes care of sending messages to the display.
-
-        // {
-        //     let mut display = ST7735::new(spi, dcx, rst, true, false, 160, 128);
-        //     log::info!("8");
-        //     display.init(&mut Delay).unwrap();
-        //     display.set_orientation(&Orientation::Landscape).unwrap();
-        //     // ST7735 is a 162 * 132 controller but it's connected to a 160 * 128 LCD, so we need to set an offset.
-        //     display.set_offset(1, 2);
-        //     log::info!("9");
-
-        //     display.clear(Rgb565::GREEN).unwrap();
-        //     log::info!("10");
-        // }
-
-        let mut display = display::ST7735::new(spi, dcx, rst, display_cs, bl, unsafe { &mut fb }, 160, 128);
+        let fbr: &'static mut [u8; IMAGE_BUFFER_SIZE] = unsafe { &mut fb };
+        let mut display = display::ST7735::new(spi, dcx, rst, display_cs, bl, fbr, 160, 128);
 
         log::info!("8");
-        display.init();
+        display.init(&mut Delay);
         // display.set_orientation(&Orientation::Landscape).unwrap();
         // ST7735 is a 162 * 132 controller but it's connected to a 160 * 128 LCD, so we need to set an offset.
         display.set_offset(1, 2);
         log::info!("9");
 
-        display.clear(Rgb565::GREEN);
+        display.clear(Rgb565::RED);
+        display.fill(imo);
         log::info!("10");
         display.show();
-        // display.show2();
 
         spawner.spawn(display_messages_task(make_static!(display))).unwrap();
         Timer::after(Duration::from_secs(10)).await;
@@ -361,10 +339,15 @@ async fn main(spawner: Spawner) {
 }
 
 mod display {
+    use core::cell::RefCell;
+
     use embedded_graphics::framebuffer::buffer_size;
     use embedded_graphics::pixelcolor::raw::RawU16;
     use embedded_graphics::pixelcolor::Rgb565;
-    use embedded_graphics::prelude::{PixelColor, RawData, RgbColor};
+    use embedded_graphics::prelude::{DrawTarget, OriginDimensions, PixelColor, Point, RawData, RgbColor, Size};
+    use embedded_graphics::primitives::{PointsIter, Rectangle};
+    use embedded_graphics::Pixel;
+    use embedded_hal_02::blocking::delay::DelayMs;
     use embedded_hal_02::blocking::spi;
     use embedded_hal_02::digital::v2::OutputPin;
     use rpi_messages_common::{MessageUpdateKind, UpdateResult, IMAGE_BUFFER_SIZE, IMAGE_WIDTH};
@@ -439,10 +422,13 @@ mod display {
             self.dy = dy;
         }
 
-        pub fn init(&mut self) {
+        pub fn init<DELAY>(&mut self, delay: &mut DELAY)
+        where
+            DELAY: DelayMs<u8>,
+        {
             self.module_init();
             self.reset();
-            self.init_reg();
+            self.init_reg(delay);
         }
 
         fn write_cmd(&mut self, cmd: u8) {
@@ -478,11 +464,11 @@ mod display {
             self.rst.set_high();
         }
 
-        fn init_reg(&mut self) {
+        fn init_reg<DELAY>(&mut self, delay: &mut DELAY)
+        where
+            DELAY: DelayMs<u8>,
+        {
             ////////////////////////////////////
-            self.write_cmd(0x36);
-            self.write_data(0x70);
-
             // 65k mode
             // the other one does it in the end
             self.write_cmd(0x3A);
@@ -577,6 +563,11 @@ mod display {
             self.write_cmd(0xF6); // Disable ram power save mode
             self.write_data(0x00);
 
+            delay.delay_ms(100);
+            // set orientation to landscape
+            self.write_cmd(0x36);
+            self.write_data(0x60);
+
             //////////////////////////////////////////////////////////
             // sleep out
             self.write_cmd(0x11);
@@ -586,28 +577,47 @@ mod display {
             self.write_cmd(0x29)
         }
 
-        pub fn clear(&mut self, color: Rgb565) {
-            let color: RawU16 = color.into();
-            let color: u16 = color.into_inner();
-            for j in (0..IMAGE_BUFFER_SIZE).step_by(2) {
-                self.buffer[j + 1] = (color & 0xff) as u8;
-                self.buffer[j] = (color >> 8) as u8;
+        pub fn fill(&mut self, new: &[u8; IMAGE_BUFFER_SIZE]) {
+            for i in 0..IMAGE_BUFFER_SIZE {
+                self.buffer[i] = new[i];
             }
         }
 
-        pub fn show(&mut self) {
+        // pub fn clear(&mut self, color: Rgb565) {
+        //     let color: RawU16 = color.into();
+        //     let color: u16 = color.into_inner();
+        //     for j in (0..IMAGE_BUFFER_SIZE).step_by(2) {
+        //         self.buffer[j] = (color >> 8) as u8;
+        //         self.buffer[j + 1] = (color & 0xff) as u8;
+        //     }
+        // }
+
+        fn set_address_window(&mut self, sx: u8, sy: u8, ex: u8, ey: u8) {
             self.write_cmd(0x2A);
+            self.write_data(0);
+            self.write_data(sx + self.dx);
             self.write_data(0x00);
-            self.write_data(self.dx);
-            self.write_data(0x00);
-            self.write_data(self.width - 1 + self.dx);
+            self.write_data(ex + self.dx);
 
             self.write_cmd(0x2B);
             self.write_data(0x00);
-            self.write_data(self.dy);
+            self.write_data(sy + self.dy);
             self.write_data(0x00);
-            self.write_data(self.height - 1 + self.dy);
+            self.write_data(ey + self.dy);
+        }
 
+        pub fn set_pixel(&mut self, x: u8, y: u8, color: u16) {
+            self.set_address_window(x, y, x, y);
+            self.write_cmd(0x2C);
+
+            self.cs.set_high();
+            self.dc.set_high();
+            self.cs.set_low();
+            self.spi.write(&color.to_be_bytes());
+            self.cs.set_high();
+        }
+        pub fn show(&mut self) {
+            self.set_address_window(0, 0, self.width - 1, self.height - 1);
             self.write_cmd(0x2C);
 
             self.cs.set_high();
@@ -646,6 +656,93 @@ mod display {
 
             self.spi.write(&_buffer);
             self.cs.set_high();
+        }
+    }
+
+    impl<SPI, DC, RST, CS, BL> DrawTarget for ST7735<SPI, DC, RST, CS, BL>
+    where
+        SPI: spi::Write<u8>,
+        DC: OutputPin,
+        RST: OutputPin,
+        CS: OutputPin,
+        BL: OutputPin,
+    {
+        type Error = ();
+        type Color = Rgb565;
+
+        fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
+        where
+            I: IntoIterator<Item = Pixel<Self::Color>>,
+        {
+            for Pixel(coord, color) in pixels.into_iter() {
+                // Only draw pixels that would be on screen
+                if coord.x >= 0 && coord.y >= 0 && coord.x < self.width as i32 && coord.y < self.height as i32 {
+                    self.set_pixel(coord.x as u8, coord.y as u8, RawU16::from(color).into_inner());
+                }
+            }
+
+            Ok(())
+        }
+
+        fn fill_contiguous<I>(&mut self, area: &Rectangle, colors: I) -> Result<(), Self::Error>
+        where
+            I: IntoIterator<Item = Self::Color>,
+        {
+            // Clamp area to drawable part of the display target
+            let drawable_area = area.intersection(&Rectangle::new(Point::zero(), self.size()));
+
+            if drawable_area.size != Size::zero() {
+                self.set_address_window(
+                    drawable_area.top_left.x as u8,
+                    drawable_area.top_left.y as u8,
+                    (drawable_area.top_left.x + (drawable_area.size.width - 1) as i32) as u8,
+                    (drawable_area.top_left.y + (drawable_area.size.height - 1) as i32) as u8,
+                );
+
+                self.write_cmd(0x2C);
+
+                self.cs.set_high();
+                self.dc.set_high();
+                self.cs.set_low();
+
+                let mut buffer = [0; 32];
+                let mut index = 0;
+                for color in area
+                    .points()
+                    .zip(colors)
+                    .filter(|(pos, _color)| drawable_area.contains(*pos))
+                    .map(|(_, color)| RawU16::from(color).into_inner())
+                {
+                    let as_bytes = color.to_be_bytes();
+                    buffer[index] = as_bytes[0];
+                    buffer[index + 1] = as_bytes[1];
+                    index += 2;
+                    if index >= buffer.len() {
+                        self.spi.write(&buffer);
+                        index = 0;
+                    }
+                }
+                self.spi.write(&buffer[0..index]);
+
+                self.cs.set_high();
+            }
+            Ok(())
+        }
+    }
+
+    impl<SPI, DC, RST, CS, BL> OriginDimensions for ST7735<SPI, DC, RST, CS, BL>
+    where
+        SPI: spi::Write<u8>,
+        DC: OutputPin,
+        RST: OutputPin,
+        CS: OutputPin,
+        BL: OutputPin,
+    {
+        fn size(&self) -> embedded_graphics::prelude::Size {
+            embedded_graphics::prelude::Size {
+                width: self.width as u32,
+                height: self.height as u32,
+            }
         }
     }
 }
