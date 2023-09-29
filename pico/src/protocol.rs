@@ -3,9 +3,9 @@
 use cyw43::Control;
 use embassy_net::tcp::{ConnectError, TcpSocket};
 use embassy_net::{IpAddress, IpEndpoint, Stack};
-use embassy_time::Duration;
+use embassy_time::{Duration, Timer};
 use embedded_io_async::{Read, Write};
-use rpi_messages_common::{ClientCommand, MessageUpdate, UpdateResult, IMAGE_BUFFER_SIZE, UPDATE_RESULT_LEN};
+use rpi_messages_common::{ClientCommand, MessageUpdate, UpdateResult, IMAGE_BUFFER_SIZE};
 
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(10);
 const SERVER_ENDPOINT: IpEndpoint = IpEndpoint::new(IpAddress::v4(192, 168, 12, 1), 1337);
@@ -37,24 +37,31 @@ impl<'a> Protocol<'a> {
     }
 
     pub async fn check_update(&mut self) -> Option<UpdateResult> {
-        let command_buf = ClientCommand::CheckUpdate.serialize();
+        let command_buf = ClientCommand::CheckUpdate.serialize()?;
         self.socket.write_all(&command_buf).await.unwrap();
 
-        let mut reply_buf = [0u8; UPDATE_RESULT_LEN];
+        let mut reply_buf = [0u8; UpdateResult::SERIALIZED_LEN];
         self.socket.read_exact(&mut reply_buf).await.unwrap();
 
         UpdateResult::deserialize(&reply_buf)
     }
 
-    pub async fn request_update(&mut self, update: &MessageUpdate, message_buf: &mut [u8]) {
+    pub async fn request_update(&mut self, update: &MessageUpdate, message_buf: &mut [u8]) -> Option<()> {
         debug_assert!(message_buf.len() >= update.kind.size());
+        log::info!("message buf len: {}", message_buf.len());
+        log::info!("update kind size: {}", update.kind.size());
+        assert!(message_buf.len() > 0);
+        assert!(update.kind.size() > 0);
 
-        let command_buf = ClientCommand::RequestUpdate(update.uuid).serialize();
+        Timer::after(Duration::from_secs(10)).await;
+
+        let command_buf = ClientCommand::RequestUpdate(update.uuid).serialize()?;
         self.socket.write_all(&command_buf).await.unwrap();
 
         self.socket
             .read_exact(&mut message_buf[..update.kind.size()])
             .await
             .unwrap();
+        Some(())
     }
 }

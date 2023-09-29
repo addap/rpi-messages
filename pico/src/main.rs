@@ -48,7 +48,7 @@ const MESSAGE_TEXT_STYLE: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&MESSAG
 const WIFI_SSID: &str = env!("WIFI_SSID");
 const WIFI_PASSWORD: &str = env!("WIFI_PASSWORD");
 const MESSAGE_FETCH_INTERVAL: Duration = Duration::from_secs(60);
-const SERVER_CONNECT_ERROR_WAIT: Duration = Duration::from_secs(10);
+const SERVER_CONNECT_ERROR_WAIT: Duration = Duration::from_secs(2);
 
 /// Global variable to hold message data retrieved from server. No persistence accross reboots.
 /// We need the async mutex because we want to do an async read call inside a critical section.
@@ -179,22 +179,27 @@ async fn display_messages_task(
             log::info!("Acquiring mutex to read message buffer.");
             let guard = MESSAGES.lock().await;
             let messages = RefCell::borrow(&guard);
-            let next_message = messages.next_display_message_generic(last_message_time);
-            last_message_time = next_message.updated_at();
+            if let Some(next_message) = messages.next_display_message_generic(last_message_time) {
+                last_message_time = next_message.updated_at();
 
-            match next_message {
-                GenericMessage::Text(text) => {
-                    log::info!("Showing a text message: {}", text.data.text.as_str());
-                    Text::new(text.data.text.as_str(), Point::new(20, 100), MESSAGE_TEXT_STYLE)
-                        .draw(display)
-                        .unwrap();
-                    // TODO add logic to add linebreaks/margins
+                match next_message {
+                    GenericMessage::Text(text) => {
+                        log::info!("Showing a text message: {}", text.data.text.as_str());
+                        Text::new(text.data.text.as_str(), Point::new(20, 100), MESSAGE_TEXT_STYLE)
+                            .draw(display)
+                            .unwrap();
+                        // TODO add logic to add linebreaks/margins
+                    }
+                    GenericMessage::Image(image) => {
+                        log::info!("Showing an image message.");
+                        let raw: ImageRawBE<Rgb565> = ImageRaw::new(&image.data.image, IMAGE_WIDTH as u32);
+                        Image::new(&raw, Point::zero()).draw(display).unwrap();
+                    }
                 }
-                GenericMessage::Image(image) => {
-                    log::info!("Showing an image message.");
-                    let raw: ImageRawBE<Rgb565> = ImageRaw::new(&image.data.image, IMAGE_WIDTH as u32);
-                    Image::new(&raw, Point::zero()).draw(display).unwrap();
-                }
+            } else {
+                Text::new("No messages :(", Point::new(20, 100), MESSAGE_TEXT_STYLE)
+                    .draw(display)
+                    .unwrap();
             }
         }
 

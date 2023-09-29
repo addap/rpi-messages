@@ -134,30 +134,40 @@ impl Messages {
     ///
     /// - `last_message`: the last message that was displayed. If `None`, it this function returns the oldest active message.
     ///   If `Some(m)` it returns the oldest active message newer than `m`.
-    pub fn next_display_message_generic(&self, last_message_time: Instant) -> GenericMessage<'_> {
+    pub fn next_display_message_generic(&self, last_message_time: Instant) -> Option<GenericMessage<'_>> {
         let next_display_text = Messages::next_display_message(&self.texts, last_message_time);
         let next_display_image = Messages::next_display_message(&self.images, last_message_time);
 
-        if next_display_text.updated_at < next_display_image.updated_at {
-            GenericMessage::Text(next_display_text)
-        } else {
-            GenericMessage::Image(next_display_image)
-        }
+        // a.d. not really more readable than if let Some()
+        next_display_text.map_or_else(
+            || next_display_image.map(|m| GenericMessage::Image(m)),
+            |next_display_text| {
+                next_display_image.map_or_else(
+                    || None,
+                    |next_display_image| {
+                        if next_display_text.updated_at < next_display_image.updated_at {
+                            Some(GenericMessage::Text(next_display_text))
+                        } else {
+                            Some(GenericMessage::Image(next_display_image))
+                        }
+                    },
+                )
+            },
+        )
     }
 
-    fn next_display_message<T: MessageData>(messages: &[Message<T>], last_message_time: Instant) -> &Message<T> {
+    fn next_display_message<T: MessageData>(
+        messages: &[Message<T>],
+        last_message_time: Instant,
+    ) -> Option<&Message<T>> {
         if let Some(message) = messages
             .iter()
             .filter(|m| m.is_active() && m.updated_at > last_message_time)
             .min_by_key(|m| m.updated_at)
         {
-            message
+            Some(message)
         } else {
-            messages
-                .iter()
-                .filter(|m| m.is_active())
-                .min_by_key(|m| m.updated_at)
-                .unwrap()
+            messages.iter().filter(|m| m.is_active()).min_by_key(|m| m.updated_at)
         }
     }
 

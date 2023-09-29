@@ -1,6 +1,4 @@
-use rpi_messages_common::{
-    ClientCommand, MessageUpdate, MessageUpdateKind, UpdateResult, CLIENT_COMMAND_LEN,
-};
+use rpi_messages_common::{ClientCommand, MessageUpdate, MessageUpdateKind, UpdateResult};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 
@@ -48,7 +46,7 @@ fn main() {
 }
 
 fn parse_client_command(socket: &mut TcpStream) -> Option<ClientCommand> {
-    let mut command_buf = [0u8; CLIENT_COMMAND_LEN];
+    let mut command_buf = [0u8; ClientCommand::SERIALIZED_LEN];
     socket.read_exact(&mut command_buf).ok()?;
     ClientCommand::deserialize(&command_buf)
 }
