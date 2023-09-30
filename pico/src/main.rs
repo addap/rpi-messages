@@ -31,7 +31,7 @@ use embedded_graphics::prelude::*;
 use embedded_graphics::text::Text;
 // use panic_probe as _;
 use rp2040_panic_usb_boot as _;
-use rpi_messages_common::{MessageUpdateKind, UpdateResult, IMAGE_BUFFER_SIZE, IMAGE_WIDTH};
+use rpi_messages_common::{MessageUpdateKind, UpdateResult, IMAGE_BUFFER_SIZE, IMAGE_WIDTH, TEXT_BUFFER_SIZE};
 use rpi_messages_pico::messagebuf::{GenericMessage, Messages};
 use rpi_messages_pico::protocol::Protocol;
 use st7735_lcd::{Orientation, ST7735};
@@ -128,16 +128,25 @@ async fn fetch_data_task(stack: &'static Stack<cyw43::NetDriver<'static>>, contr
                         let mut messages = RefCell::borrow_mut(&mut guard);
 
                         match update.kind {
-                            MessageUpdateKind::Text(_) => {
+                            MessageUpdateKind::Text(size) => {
                                 log::info!("Requesting text update.");
                                 let message = messages.next_available_text();
                                 message.set_meta(&update);
-                                unsafe {
-                                    let message_buf = message.data.text.as_bytes_mut();
-                                    protocol.request_update(&update, message_buf).await;
-                                    if core::str::from_utf8(&message_buf).is_err() {
+                                message.data.text.clear();
+
+                                // Since we cannot access the underlying memory of the string directly, we allocate a
+                                // new buffer here and push it into the string after verifying it is valid UTF-8.
+                                let mut message_buf = [0u8; TEXT_BUFFER_SIZE];
+                                let message_buf = &mut message_buf[..(size as usize)];
+                                protocol.request_update(&update, message_buf).await;
+
+                                match core::str::from_utf8(message_buf) {
+                                    Ok(text) => {
+                                        log::info!("Received text update: {}", text);
+                                        message.data.text.push_str(text).unwrap();
+                                    }
+                                    Err(e) => {
                                         log::warn!("Received invalid utf8 from server");
-                                        message_buf.fill(0)
                                     }
                                 }
                             }

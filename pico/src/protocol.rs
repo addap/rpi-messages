@@ -53,8 +53,6 @@ impl<'a> Protocol<'a> {
         assert!(message_buf.len() > 0);
         assert!(update.kind.size() > 0);
 
-        Timer::after(Duration::from_secs(10)).await;
-
         let command_buf = ClientCommand::RequestUpdate(update.uuid).serialize()?;
         self.socket.write_all(&command_buf).await.unwrap();
 

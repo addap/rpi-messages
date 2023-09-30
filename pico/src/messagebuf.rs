@@ -25,6 +25,7 @@ impl MessageData for TextData {}
 
 impl TextData {
     const fn new() -> Self {
+        // a.d. TODO taking a mutable reference to this results in an empty slice!
         Self { text: String::new() }
     }
 }
@@ -135,47 +136,70 @@ impl Messages {
     /// - `last_message`: the last message that was displayed. If `None`, it this function returns the oldest active message.
     ///   If `Some(m)` it returns the oldest active message newer than `m`.
     pub fn next_display_message_generic(&self, last_message_time: Instant) -> Option<GenericMessage<'_>> {
+        log::debug!("ndmg: Searching next display text.");
         let next_display_text = Messages::next_display_message(&self.texts, last_message_time);
+        log::debug!("ndmg: Searching next display image.");
         let next_display_image = Messages::next_display_message(&self.images, last_message_time);
 
-        // a.d. not really more readable than if let Some()
-        next_display_text.map_or_else(
-            || next_display_image.map(|m| GenericMessage::Image(m)),
-            |next_display_text| {
-                next_display_image.map_or_else(
-                    || None,
-                    |next_display_image| {
-                        if next_display_text.updated_at < next_display_image.updated_at {
-                            Some(GenericMessage::Text(next_display_text))
-                        } else {
-                            Some(GenericMessage::Image(next_display_image))
-                        }
-                    },
-                )
-            },
-        )
+        match (next_display_text, next_display_image) {
+            (Some(next_display_text), Some(next_display_image)) => {
+                log::debug!("ndmg: Both text and image message.");
+                if next_display_text.updated_at < next_display_image.updated_at {
+                    log::debug!("ndmg: Text is older.");
+                    Some(GenericMessage::Text(next_display_text))
+                } else {
+                    log::debug!("ndmg: Image is older.");
+                    Some(GenericMessage::Image(next_display_image))
+                }
+            }
+            (Some(next_display_text), None) => {
+                log::debug!("ndmg: Only text message.");
+                Some(GenericMessage::Text(next_display_text))
+            }
+            (None, Some(next_display_image)) => {
+                log::debug!("ndmg: Only image message.");
+                Some(GenericMessage::Image(next_display_image))
+            }
+            (None, None) => {
+                log::debug!("ndmg: No active messages.");
+                None
+            }
+        }
     }
 
     fn next_display_message<T: MessageData>(
         messages: &[Message<T>],
         last_message_time: Instant,
     ) -> Option<&Message<T>> {
-        if let Some(message) = messages
+        let latest_message = messages
             .iter()
             .filter(|m| m.is_active() && m.updated_at > last_message_time)
-            .min_by_key(|m| m.updated_at)
-        {
-            Some(message)
+            .min_by_key(|m| m.updated_at);
+
+        if latest_message.is_some() {
+            log::debug!("ndm: Found active message that is newer than last_message_time.");
+            latest_message
         } else {
-            messages.iter().filter(|m| m.is_active()).min_by_key(|m| m.updated_at)
+            log::debug!("ndm: Found no new active messages, wrapping around to oldest.");
+            let earliest_message = messages.iter().filter(|m| m.is_active()).min_by_key(|m| m.updated_at);
+
+            if earliest_message.is_some() {
+                log::debug!("ndm: Found oldest active message.");
+                earliest_message
+            } else {
+                log::debug!("ndm: Found no active messages at all.");
+                None
+            }
         }
     }
 
     pub fn next_available_text(&mut self) -> &mut Message<TextData> {
+        log::debug!("nat: Searching next available text.");
         Messages::next_available_message(&mut self.texts)
     }
 
     pub fn next_available_image(&mut self) -> &mut Message<ImageData> {
+        log::debug!("nai: Searching next available image.");
         Messages::next_available_message(&mut self.images)
     }
 

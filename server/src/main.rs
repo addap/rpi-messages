@@ -19,7 +19,7 @@ fn main() {
                             let result = if i == 0 {
                                 println!("Got check for update. Sending text.");
                                 UpdateResult::Update(MessageUpdate {
-                                    lifetime_sec: 60 * 60,
+                                    lifetime_sec: 60 * 100,
                                     kind: MessageUpdateKind::Text(text.len() as u32),
                                     uuid: 0,
                                 })
