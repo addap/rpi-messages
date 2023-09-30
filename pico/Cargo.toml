@@ -20,19 +20,15 @@ embassy-usb-logger = { git = "https://github.com/embassy-rs/embassy.git", versio
 cyw43 = { git = "https://github.com/embassy-rs/embassy.git", features = ["firmware-logs"] }
 cyw43-pio = { git = "https://github.com/embassy-rs/embassy.git", features = ["overclock"] }
 
-fixed = "1.23.1"
-fixed-macro = "1.2"
-
 #cortex-m = { version = "0.7.6", features = ["critical-section-single-core"] }
 cortex-m = { version = "0.7.6", features = ["inline-asm"] }
 cortex-m-rt = "0.7.0"
-panic-probe = { version = "0.3", features = [] }
+#panic-probe = { version = "0.3", features = [] }
 futures = { version = "0.3.17", default-features = false, features = ["async-await", "cfg-target-has-atomic", "unstable"] }
 display-interface-spi = "0.4.1"
-embedded-graphics = "0.8.1"
 display-interface = "0.4.1"
+embedded-graphics = "0.8.1"
 byte-slice-cast = { version = "1.2.0", default-features = false }
-smart-leds = "0.3.0"
 heapless = "0.7.15"
 usbd-hid = "0.6.1"
 
@@ -44,9 +40,8 @@ embedded-io-async = { version = "0.5.0", features = [] }
 embedded-storage = { version = "0.3" }
 static_cell = { version = "1.1", features = ["nightly"]}
 log = "0.4"
-pio-proc = "0.2"
-pio = "0.2.1"
 rand = { version = "0.8.5", default-features = false }
 st7735-lcd = "0.9.0"
 rp2040-panic-usb-boot = "0.5.0"
+
 

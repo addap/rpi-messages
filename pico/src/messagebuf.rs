@@ -1,3 +1,5 @@
+use core::borrow::Borrow;
+
 use embassy_time::{Duration, Instant};
 use heapless::String;
 use rpi_messages_common::{MessageUpdate, IMAGE_BUFFER_SIZE, TEXT_BUFFER_SIZE};
@@ -7,9 +9,7 @@ use rpi_messages_common::{MessageUpdate, IMAGE_BUFFER_SIZE, TEXT_BUFFER_SIZE};
 const TEXT_MESSAGE_NUM: usize = 10;
 const IMAGE_MESSAGE_NUM: usize = 2;
 
-pub trait MessageData {
-    // fn new() -> Self;
-}
+pub trait MessageData: Borrow<[u8]> {}
 
 #[derive(Debug)]
 pub struct TextData {
@@ -21,6 +21,11 @@ pub struct ImageData {
     pub image: [u8; IMAGE_BUFFER_SIZE],
 }
 
+impl Borrow<[u8]> for TextData {
+    fn borrow(&self) -> &[u8] {
+        self.text.as_bytes()
+    }
+}
 impl MessageData for TextData {}
 
 impl TextData {
@@ -30,6 +35,11 @@ impl TextData {
     }
 }
 
+impl Borrow<[u8]> for ImageData {
+    fn borrow(&self) -> &[u8] {
+        &self.image
+    }
+}
 impl MessageData for ImageData {}
 
 impl ImageData {
@@ -40,6 +50,12 @@ impl ImageData {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct MessageMeta {
+    pub lifetime: Duration,
+    pub updated_at: Instant,
+}
+
 /// An earlier design used Message<T> where T: MessageType
 /// but I wanted to have new be a const fn which is not allowed in traits, so we specialize the two types of messages.
 pub struct Message<T>
@@ -47,26 +63,37 @@ where
     T: MessageData,
 {
     pub data: T,
-    pub lifetime: Duration,
-    pub updated_at: Instant,
+    pub meta: MessageMeta,
+}
+
+impl MessageMeta {
+    const fn new() -> Self {
+        Self {
+            lifetime: Duration::MIN,
+            updated_at: Instant::MIN,
+        }
+    }
+
+    pub fn is_active(&self) -> bool {
+        let now = Instant::now();
+        now < self.updated_at + self.lifetime
+    }
 }
 
 impl Message<TextData> {
-    const fn new() -> Message<TextData> {
+    const fn new() -> Self {
         Self {
             data: TextData::new(),
-            lifetime: Duration::MIN,
-            updated_at: Instant::MIN,
+            meta: MessageMeta::new(),
         }
     }
 }
 
 impl Message<ImageData> {
-    const fn new() -> Message<ImageData> {
+    const fn new() -> Self {
         Self {
             data: ImageData::new(),
-            lifetime: Duration::MIN,
-            updated_at: Instant::MIN,
+            meta: MessageMeta::new(),
         }
     }
 }
@@ -75,29 +102,36 @@ impl<T> Message<T>
 where
     T: MessageData,
 {
-    pub fn is_active(&self) -> bool {
-        let now = Instant::now();
-        now < self.updated_at + self.lifetime
-    }
-
     pub fn set_meta(&mut self, update: &MessageUpdate) {
-        self.updated_at = Instant::now();
-        self.lifetime = Duration::from_secs(update.lifetime_sec.into());
+        self.meta.updated_at = Instant::now();
+        self.meta.lifetime = Duration::from_secs(update.lifetime_sec.into());
     }
 }
 
-/// TODO this whole data structure organization does not seem optimal.
-#[derive(Clone, Copy)]
-pub enum GenericMessage<'a> {
-    Text(&'a Message<TextData>),
-    Image(&'a Message<ImageData>),
+pub enum DisplayMessage<'a> {
+    Text(&'a TextData),
+    Image(&'a ImageData),
 }
 
-impl<'a> GenericMessage<'a> {
-    pub fn updated_at(&self) -> Instant {
-        match self {
-            GenericMessage::Text(m) => m.updated_at,
-            GenericMessage::Image(m) => m.updated_at,
+pub struct GenericDisplayMessage<'a> {
+    pub data: DisplayMessage<'a>,
+    pub meta: MessageMeta,
+}
+
+impl<'a> From<&'a Message<TextData>> for GenericDisplayMessage<'a> {
+    fn from(value: &'a Message<TextData>) -> Self {
+        Self {
+            data: DisplayMessage::Text(&value.data),
+            meta: value.meta,
+        }
+    }
+}
+
+impl<'a> From<&'a Message<ImageData>> for GenericDisplayMessage<'a> {
+    fn from(value: &'a Message<ImageData>) -> Self {
+        Self {
+            data: DisplayMessage::Image(&value.data),
+            meta: value.meta,
         }
     }
 }
@@ -135,53 +169,26 @@ impl Messages {
     ///
     /// - `last_message`: the last message that was displayed. If `None`, it this function returns the oldest active message.
     ///   If `Some(m)` it returns the oldest active message newer than `m`.
-    pub fn next_display_message_generic(&self, last_message_time: Instant) -> Option<GenericMessage<'_>> {
-        log::debug!("ndmg: Searching next display text.");
-        let next_display_text = Messages::next_display_message(&self.texts, last_message_time);
-        log::debug!("ndmg: Searching next display image.");
-        let next_display_image = Messages::next_display_message(&self.images, last_message_time);
-
-        match (next_display_text, next_display_image) {
-            (Some(next_display_text), Some(next_display_image)) => {
-                log::debug!("ndmg: Both text and image message.");
-                if next_display_text.updated_at < next_display_image.updated_at {
-                    log::debug!("ndmg: Text is older.");
-                    Some(GenericMessage::Text(next_display_text))
-                } else {
-                    log::debug!("ndmg: Image is older.");
-                    Some(GenericMessage::Image(next_display_image))
-                }
-            }
-            (Some(next_display_text), None) => {
-                log::debug!("ndmg: Only text message.");
-                Some(GenericMessage::Text(next_display_text))
-            }
-            (None, Some(next_display_image)) => {
-                log::debug!("ndmg: Only image message.");
-                Some(GenericMessage::Image(next_display_image))
-            }
-            (None, None) => {
-                log::debug!("ndmg: No active messages.");
-                None
-            }
-        }
-    }
-
-    fn next_display_message<T: MessageData>(
-        messages: &[Message<T>],
-        last_message_time: Instant,
-    ) -> Option<&Message<T>> {
-        let latest_message = messages
+    pub fn next_display_message_generic(&self, last_message_time: Instant) -> Option<GenericDisplayMessage<'_>> {
+        let messages = self
+            .texts
             .iter()
-            .filter(|m| m.is_active() && m.updated_at > last_message_time)
-            .min_by_key(|m| m.updated_at);
+            .map(|text| GenericDisplayMessage::from(text))
+            .chain(self.images.iter().map(|image| GenericDisplayMessage::from(image)));
+
+        let latest_message = messages
+            .clone()
+            .filter(|m| m.meta.is_active() && m.meta.updated_at > last_message_time)
+            .min_by_key(|m| m.meta.updated_at);
 
         if latest_message.is_some() {
             log::debug!("ndm: Found active message that is newer than last_message_time.");
             latest_message
         } else {
             log::debug!("ndm: Found no new active messages, wrapping around to oldest.");
-            let earliest_message = messages.iter().filter(|m| m.is_active()).min_by_key(|m| m.updated_at);
+            let earliest_message = messages
+                .filter(|m| m.meta.is_active())
+                .min_by_key(|m| m.meta.updated_at);
 
             if earliest_message.is_some() {
                 log::debug!("ndm: Found oldest active message.");
@@ -194,13 +201,17 @@ impl Messages {
     }
 
     pub fn next_available_text(&mut self) -> &mut Message<TextData> {
-        log::debug!("nat: Searching next available text.");
-        Messages::next_available_message(&mut self.texts)
+        log::debug!("nat: Retrieve next available text.");
+        let message = Messages::next_available_message(&mut self.texts);
+        message.data.text.clear();
+        message
     }
 
     pub fn next_available_image(&mut self) -> &mut Message<ImageData> {
-        log::debug!("nai: Searching next available image.");
-        Messages::next_available_message(&mut self.images)
+        log::debug!("nai: Retrieve next available image.");
+        let message = Messages::next_available_message(&mut self.images);
+        message.data.image.fill(0);
+        message
     }
 
     /// Returns a pointer to the next message that should be overwritten.
@@ -212,11 +223,11 @@ impl Messages {
         let mut oldest_index = 0;
 
         for (i, message) in messages.iter_mut().enumerate() {
-            if !message.is_active() {
+            if !message.meta.is_active() {
                 inactive_index = Some(i);
-            } else if message.updated_at < oldest_updated_at {
+            } else if message.meta.updated_at < oldest_updated_at {
                 oldest_index = i;
-                oldest_updated_at = message.updated_at;
+                oldest_updated_at = message.meta.updated_at;
             }
         }
 

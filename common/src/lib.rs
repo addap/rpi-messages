@@ -75,7 +75,7 @@ impl MessageUpdate {
 
     pub fn serialize(&self) -> Option<[u8; Self::SERIALIZED_LEN]> {
         let mut output = [0u8; Self::SERIALIZED_LEN];
-        let serialized = postcard::to_slice(self, &mut output).ok()?;
+        postcard::to_slice(self, &mut output).ok()?;
 
         Some(output)
     }
@@ -90,7 +90,7 @@ impl UpdateResult {
 
     pub fn serialize(&self) -> Option<[u8; Self::SERIALIZED_LEN]> {
         let mut output = [0u8; Self::SERIALIZED_LEN];
-        let serialized = postcard::to_slice(self, &mut output).ok()?;
+        postcard::to_slice(self, &mut output).ok()?;
 
         Some(output)
     }
@@ -105,7 +105,7 @@ impl ClientCommand {
 
     pub fn serialize(&self) -> Option<[u8; Self::SERIALIZED_LEN]> {
         let mut output = [0u8; Self::SERIALIZED_LEN];
-        let serialized = postcard::to_slice(self, &mut output).ok()?;
+        postcard::to_slice(self, &mut output).ok()?;
 
         Some(output)
     }

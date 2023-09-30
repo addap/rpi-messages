@@ -1,42 +1,66 @@
-use rpi_messages_common::{ClientCommand, MessageUpdate, MessageUpdateKind, UpdateResult};
+use rpi_messages_common::{
+    ClientCommand, MessageUpdate, MessageUpdateKind, UpdateResult, IMAGE_BUFFER_SIZE,
+};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+
+static IMO: &'static [u8; IMAGE_BUFFER_SIZE] = include_bytes!("../../../pictures/loveimo.bin");
+static TEXT: &'static str = "Hello There";
 
 fn main() {
     let listener = TcpListener::bind("0.0.0.0:1337").unwrap();
 
+    let mut stage = 0;
     loop {
         println!("Listening for new connections.");
         match listener.accept() {
             Ok((mut socket, addr)) => {
                 println!("new client at {:?}", addr);
 
-                let mut i = 0;
-                let text = "Hello There";
                 while let Some(command) = parse_client_command(&mut socket) {
                     match command {
                         ClientCommand::CheckUpdate => {
-                            let result = if i == 0 {
-                                println!("Got check for update. Sending text.");
-                                UpdateResult::Update(MessageUpdate {
-                                    lifetime_sec: 60 * 100,
-                                    kind: MessageUpdateKind::Text(text.len() as u32),
-                                    uuid: 0,
-                                })
-                            } else {
-                                println!("Got check for update. Sending nothing.");
-                                UpdateResult::NoUpdate
+                            let result = match stage {
+                                0 => {
+                                    println!("Got check for update. Sending text.");
+                                    UpdateResult::Update(MessageUpdate {
+                                        lifetime_sec: 60 * 100,
+                                        kind: MessageUpdateKind::Text(TEXT.len() as u32),
+                                        uuid: 0,
+                                    })
+                                }
+                                1 => {
+                                    println!("Got check for update. Sending image.");
+                                    UpdateResult::Update(MessageUpdate {
+                                        lifetime_sec: 60 * 100,
+                                        kind: MessageUpdateKind::Image,
+                                        uuid: 1,
+                                    })
+                                }
+                                _ => {
+                                    println!("Got check for update. Sending nothing.");
+                                    UpdateResult::NoUpdate
+                                }
                             };
 
                             let bytes = result.serialize().unwrap();
                             socket.write_all(&bytes).unwrap();
 
-                            i += 1;
+                            stage += 1;
                         }
-                        ClientCommand::RequestUpdate(_) => {
-                            println!("Got request for update.");
-                            socket.write_all(text.as_bytes()).unwrap()
-                        }
+                        ClientCommand::RequestUpdate(uuid) => match uuid {
+                            0 => {
+                                println!("Got request for update text.");
+                                socket.write_all(TEXT.as_bytes()).unwrap()
+                            }
+                            1 => {
+                                println!("Got request for update image.");
+                                socket.write_all(IMO).unwrap()
+                            }
+                            _ => {
+                                println!("Got unknown request for update.");
+                            }
+                        },
                     }
                 }
             }

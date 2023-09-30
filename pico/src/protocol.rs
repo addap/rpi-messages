@@ -3,7 +3,7 @@
 use cyw43::Control;
 use embassy_net::tcp::{ConnectError, TcpSocket};
 use embassy_net::{IpAddress, IpEndpoint, Stack};
-use embassy_time::{Duration, Timer};
+use embassy_time::Duration;
 use embedded_io_async::{Read, Write};
 use rpi_messages_common::{ClientCommand, MessageUpdate, UpdateResult, IMAGE_BUFFER_SIZE};
 
@@ -47,9 +47,7 @@ impl<'a> Protocol<'a> {
     }
 
     pub async fn request_update(&mut self, update: &MessageUpdate, message_buf: &mut [u8]) -> Option<()> {
-        debug_assert!(message_buf.len() >= update.kind.size());
-        log::info!("message buf len: {}", message_buf.len());
-        log::info!("update kind size: {}", update.kind.size());
+        assert!(message_buf.len() >= update.kind.size());
         assert!(message_buf.len() > 0);
         assert!(update.kind.size() > 0);
 
