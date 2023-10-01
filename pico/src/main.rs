@@ -8,6 +8,7 @@
 #![feature(type_alias_impl_trait)]
 
 use core::cell::RefCell;
+use core::cmp::min;
 
 use cyw43::Control;
 use cyw43_pio::PioSpi;
@@ -26,22 +27,31 @@ use embassy_sync::signal::Signal;
 use embassy_time::{with_timeout, Delay, Duration, Instant, Timer};
 use embedded_graphics::draw_target::DrawTarget;
 use embedded_graphics::image::{Image, ImageRaw, ImageRawBE};
-use embedded_graphics::mono_font::ascii::FONT_10X20;
+use embedded_graphics::mono_font::ascii::{FONT_10X20, FONT_8X13, FONT_9X15};
 use embedded_graphics::mono_font::{self, MonoTextStyle};
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
+use embedded_graphics::primitives::Rectangle;
 use embedded_graphics::text::Text;
+use embedded_text::alignment::HorizontalAlignment;
+use embedded_text::style::{HeightMode, TextBoxStyleBuilder, VerticalOverdraw};
+use embedded_text::TextBox;
+use error::{Result, SoftError};
 use heapless::String;
+use messagebuf::{DisplayMessage, Messages};
+use protocol::Protocol;
 // use panic_probe as _;
 use rp2040_panic_usb_boot as _;
 use rpi_messages_common::{
-    MessageUpdateKind, UpdateResult, IMAGE_BUFFER_SIZE, IMAGE_HEIGHT, IMAGE_WIDTH, TEXT_BUFFER_SIZE,
+    MessageUpdateKind, UpdateResult, IMAGE_BUFFER_SIZE, IMAGE_HEIGHT, IMAGE_WIDTH, TEXT_BUFFER_SIZE, TEXT_COLUMNS,
 };
-use rpi_messages_pico::messagebuf::{DisplayMessage, Messages};
-use rpi_messages_pico::protocol::Protocol;
-use rpi_messages_pico::{display, Result, SoftError};
 // use st7735_lcd::{Orientation, ST7735};
 use static_cell::make_static;
+
+mod display;
+mod error;
+mod messagebuf;
+mod protocol;
 
 const INIT_LOGGING_WAIT: Duration = Duration::from_secs(2);
 const INIT_SPI_WAIT: Duration = Duration::from_millis(100);
@@ -49,7 +59,7 @@ const INIT_SPI_WAIT: Duration = Duration::from_millis(100);
 const DISPLAY_FREQ: u32 = 10_000_000;
 
 const MESSAGE_DISPLAY_DURATION: Duration = Duration::from_secs(5);
-const MESSAGE_FONT: mono_font::MonoFont = FONT_10X20;
+const MESSAGE_FONT: mono_font::MonoFont = FONT_9X15;
 const MESSAGE_TEXT_COLOR: Rgb565 = Rgb565::BLACK;
 const MESSAGE_BG_COLOR: Rgb565 = Rgb565::WHITE;
 const PRIO_MESSAGE_BG_COLOR: Rgb565 = Rgb565::RED;
@@ -59,6 +69,8 @@ const WIFI_SSID: &str = env!("WIFI_SSID");
 const WIFI_PASSWORD: &str = env!("WIFI_PASSWORD");
 const MESSAGE_FETCH_INTERVAL: Duration = Duration::from_secs(60);
 const SERVER_CONNECT_ERROR_WAIT: Duration = Duration::from_secs(2);
+
+pub static DEVICE_ID: u8 = 0;
 
 /// Global variable to hold message data retrieved from server. No persistence accross reboots.
 /// We need the async mutex because we want to do an async read call inside a critical section.
@@ -178,6 +190,60 @@ async fn fetch_data_task(stack: &'static Stack<cyw43::NetDriver<'static>>, contr
     }
 }
 
+fn format_display_string(
+    s: &String<TEXT_BUFFER_SIZE>,
+    display: &mut display::ST7735<
+        Spi<'_, embassy_rp::peripherals::SPI1, Blocking>,
+        Output<'_, embassy_rp::peripherals::PIN_8>,
+        Output<'_, embassy_rp::peripherals::PIN_12>,
+        Output<'_, embassy_rp::peripherals::PIN_9>,
+        Output<'_, embassy_rp::peripherals::PIN_13>,
+    >,
+) {
+    const HORIZONTAL_MARGIN: i32 = 4;
+    const LINE_HEIGHT: i32 = 15;
+    const VERTICAL_MARGIN_OUTER: i32 = 6;
+    const VERTICAL_MARGIN_INNER: i32 = 2;
+
+    // let mut s = s.as_str();
+    // let mut l = 0;
+
+    // while s.len() > 0 {
+    //     let end = min(TEXT_COLUMNS, s.len());
+    //     let (line, new_s) = s.split_at(end);
+    //     let position = Point::new(
+    //         HORIZONTAL_MARGIN,
+    //         VERTICAL_MARGIN_OUTER + (l * (VERTICAL_MARGIN_INNER + LINE_HEIGHT) + LINE_HEIGHT - 3),
+    //     );
+
+    //     Text::new(line, position, MESSAGE_TEXT_STYLE).draw(display).unwrap();
+
+    //     s = new_s;
+    //     l += 1;
+    // }
+    let textbox_style = TextBoxStyleBuilder::new()
+        .height_mode(HeightMode::Exact(VerticalOverdraw::Visible))
+        .alignment(HorizontalAlignment::Center)
+        .vertical_alignment(embedded_text::alignment::VerticalAlignment::Middle)
+        .build();
+
+    // Specify the bounding box. Note the 0px height. The `FitToText` height mode will
+    // measure and adjust the height of the text box in `into_styled()`.
+    let bounds = Rectangle::new(
+        Point::new(HORIZONTAL_MARGIN, VERTICAL_MARGIN_OUTER),
+        Size::new(
+            IMAGE_WIDTH as u32 - HORIZONTAL_MARGIN as u32 + 1,
+            IMAGE_HEIGHT as u32 - VERTICAL_MARGIN_OUTER as u32 + 1,
+        ),
+    );
+
+    // Create the text box and apply styling options.
+    let text_box = TextBox::with_textbox_style(s.as_str(), bounds, MESSAGE_TEXT_STYLE, textbox_style);
+
+    // Draw the text box.
+    text_box.draw(display).unwrap();
+}
+
 /// This task reads messages from the global `MESSAGES` struct and displays a new one every `MESSAGE_DURATION` seconds.
 /// TODO add some queue for status messages (wifi problems, can't find server, etc.) which have priority over `MESSAGES`.
 ///
@@ -200,9 +266,7 @@ async fn display_messages_task(
 
         if let Ok(prio_message) = prio_message {
             display.clear(PRIO_MESSAGE_BG_COLOR).unwrap();
-            Text::new(prio_message.as_str(), Point::new(20, 100), MESSAGE_TEXT_STYLE)
-                .draw(display)
-                .unwrap();
+            format_display_string(&prio_message, display);
         } else {
             log::info!("Timeout! No priority message found.");
             display.clear(MESSAGE_BG_COLOR).unwrap();
@@ -215,10 +279,7 @@ async fn display_messages_task(
                 match next_message.data {
                     DisplayMessage::Text(data) => {
                         log::info!("Showing a text message: {}", data.text.as_str());
-                        Text::new(data.text.as_str(), Point::new(20, 100), MESSAGE_TEXT_STYLE)
-                            .draw(display)
-                            .unwrap();
-                        // TODO add logic to add linebreaks/margins
+                        format_display_string(&data.text, display);
                     }
                     DisplayMessage::Image(data) => {
                         log::info!("Showing an image message.");
@@ -316,7 +377,10 @@ async fn init_display(
     display.init(&mut Delay);
     // ST7735 is a 162 * 132 controller but it's connected to a 160 * 128 LCD, so we need to set an offset.
     display.set_offset(1, 2);
-    display.clear(Rgb565::RED).unwrap();
+    display.clear(PRIO_MESSAGE_BG_COLOR).unwrap();
+    Text::new("Booting...", Point::new(10, 20), MESSAGE_TEXT_STYLE)
+        .draw(&mut display)
+        .unwrap();
 
     spawner.spawn(display_messages_task(make_static!(display))).unwrap();
     log::info!("Display initialization end.");

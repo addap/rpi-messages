@@ -7,6 +7,8 @@ use embassy_time::Duration;
 use embedded_io_async::{Read, Write};
 use rpi_messages_common::{ClientCommand, MessageUpdate, UpdateResult, IMAGE_BUFFER_SIZE};
 
+use crate::DEVICE_ID;
+
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(10);
 const SERVER_ENDPOINT: IpEndpoint = IpEndpoint::new(IpAddress::v4(192, 168, 12, 1), 1337);
 
@@ -37,7 +39,7 @@ impl<'a> Protocol<'a> {
     }
 
     pub async fn check_update(&mut self) -> Option<UpdateResult> {
-        let command_buf = ClientCommand::CheckUpdate.serialize()?;
+        let command_buf = ClientCommand::CheckUpdate(DEVICE_ID).serialize()?;
         self.socket.write_all(&command_buf).await.unwrap();
 
         let mut reply_buf = [0u8; UpdateResult::SERIALIZED_LEN];

@@ -5,7 +5,10 @@ use postcard;
 use serde::{Deserialize, Serialize};
 
 /// We save images raw (TODO which endian-ness) so we use the exact screen dimensions.
-pub const TEXT_BUFFER_SIZE: usize = 70;
+pub const TEXT_LINES: usize = 7;
+pub const TEXT_COLUMNS: usize = 17;
+pub const TEXT_BUFFER_SIZE: usize = TEXT_COLUMNS * TEXT_LINES;
+// a.d. TODO invariant ((text_lines - 1 * inner margin) + 2* outer margin) == IMAGE_WIDTH etc.
 pub const IMAGE_WIDTH: usize = 160;
 pub const IMAGE_HEIGHT: usize = 128;
 pub const IMAGE_BYTES_PER_PIXEL: usize = 2;
@@ -17,12 +20,13 @@ pub enum MessageUpdateKind {
     Text(u32),
 }
 
-type UUID = u32;
+type DeviceID = u8;
+type UpdateID = u32;
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct MessageUpdate {
     pub lifetime_sec: u32,
-    pub uuid: UUID,
+    pub uuid: UpdateID,
     pub kind: MessageUpdateKind,
 }
 
@@ -34,8 +38,8 @@ pub enum UpdateResult {
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub enum ClientCommand {
-    CheckUpdate,
-    RequestUpdate(UUID),
+    CheckUpdate(DeviceID),
+    RequestUpdate(UpdateID),
 }
 
 impl MessageUpdateKind {

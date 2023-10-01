@@ -1,14 +1,8 @@
-#![no_std]
-
 use core::fmt::Write;
 
 use embassy_net::tcp::ConnectError;
 use heapless::String;
 use rpi_messages_common::TEXT_BUFFER_SIZE;
-
-pub mod display;
-pub mod messagebuf;
-pub mod protocol;
 
 pub type Result<T> = core::result::Result<T, Error>;
 
