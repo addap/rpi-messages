@@ -364,8 +364,8 @@ async fn init_wifi(spawner: Spawner, pwr: PIN_23, cs: PIN_25, pio: PIO0, dio: PI
 
     let wifi_ssid = static_data::wifi_ssid().unwrap();
     let wifi_pw = static_data::wifi_password().unwrap();
-    log::info!("Connecting to Wifi {}", wifi_ssid);
-    log::info!("with password {}", wifi_pw);
+    log::info!("Connecting to Wifi '{}' with password '{}'", wifi_ssid, wifi_pw);
+
     loop {
         match control.join_wpa2(wifi_ssid, wifi_pw).await {
             Ok(()) => {
