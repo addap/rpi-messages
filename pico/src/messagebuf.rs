@@ -1,8 +1,19 @@
 use core::borrow::Borrow;
 
+use embassy_rp::gpio::Output;
+use embassy_rp::spi::{Blocking, Spi};
 use embassy_time::{Duration, Instant};
+use embedded_graphics::draw_target::DrawTarget;
+use embedded_graphics::pixelcolor::Rgb565;
+use embedded_graphics::prelude::*;
+use embedded_graphics::primitives::Rectangle;
+use embedded_text::alignment::HorizontalAlignment;
+use embedded_text::style::{HeightMode, TextBoxStyleBuilder, VerticalOverdraw};
+use embedded_text::TextBox;
 use heapless::String;
-use rpi_messages_common::{MessageUpdate, IMAGE_BUFFER_SIZE, TEXT_BUFFER_SIZE};
+use rpi_messages_common::{MessageUpdate, IMAGE_BUFFER_SIZE, IMAGE_HEIGHT, IMAGE_WIDTH, TEXT_BUFFER_SIZE};
+
+use crate::{display, MESSAGE_BG_COLOR, MESSAGE_TEXT_STYLE, PRIO_MESSAGE_BG_COLOR};
 
 /// With margins we are able to fit 14 * 5 characters on one screen.
 /// a.d. TODO we could also do paging for longer messages, since we already need to infer linebreaks anyways.
@@ -246,4 +257,56 @@ impl Messages {
         //     messages.iter_mut().min_by_key(|message| message.updated_at).unwrap()
         // }
     }
+}
+
+#[derive(Clone, Copy)]
+pub enum DisplayOptions {
+    PriorityMessage,
+    NormalMessage,
+}
+
+impl DisplayOptions {
+    fn clear_style(self) -> Rgb565 {
+        match self {
+            DisplayOptions::PriorityMessage => PRIO_MESSAGE_BG_COLOR,
+            DisplayOptions::NormalMessage => MESSAGE_BG_COLOR,
+        }
+    }
+}
+
+pub fn format_display_string(
+    text: &String<TEXT_BUFFER_SIZE>,
+    options: DisplayOptions,
+    display: &mut display::ST7735<
+        Spi<'_, embassy_rp::peripherals::SPI1, Blocking>,
+        Output<'_, embassy_rp::peripherals::PIN_8>,
+        Output<'_, embassy_rp::peripherals::PIN_12>,
+        Output<'_, embassy_rp::peripherals::PIN_9>,
+        Output<'_, embassy_rp::peripherals::PIN_13>,
+    >,
+) {
+    const HORIZONTAL_MARGIN: i32 = 4;
+    const VERTICAL_MARGIN: i32 = 6;
+
+    let textbox_style = TextBoxStyleBuilder::new()
+        .height_mode(HeightMode::Exact(VerticalOverdraw::Visible))
+        .alignment(HorizontalAlignment::Center)
+        .vertical_alignment(embedded_text::alignment::VerticalAlignment::Middle)
+        .build();
+
+    let bounds = Rectangle::new(
+        Point::new(HORIZONTAL_MARGIN, VERTICAL_MARGIN),
+        Size::new(
+            // + 1 since margins are not symmatric in the 9x15 font size
+            IMAGE_WIDTH as u32 - HORIZONTAL_MARGIN as u32 + 1,
+            IMAGE_HEIGHT as u32 - VERTICAL_MARGIN as u32 + 1,
+        ),
+    );
+
+    // Create the text box and apply styling options.
+    let text_box = TextBox::with_textbox_style(text.as_str(), bounds, MESSAGE_TEXT_STYLE, textbox_style);
+
+    // Draw the text box.
+    display.clear(options.clear_style()).unwrap();
+    text_box.draw(display).unwrap();
 }

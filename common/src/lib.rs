@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 pub const TEXT_LINES: usize = 7;
 pub const TEXT_COLUMNS: usize = 17;
 pub const TEXT_BUFFER_SIZE: usize = TEXT_COLUMNS * TEXT_LINES;
-// a.d. TODO invariant ((text_lines - 1 * inner margin) + 2* outer margin) == IMAGE_WIDTH etc.
 pub const IMAGE_WIDTH: usize = 160;
 pub const IMAGE_HEIGHT: usize = 128;
 pub const IMAGE_BYTES_PER_PIXEL: usize = 2;

@@ -48,6 +48,8 @@ use rpi_messages_common::{
 // use st7735_lcd::{Orientation, ST7735};
 use static_cell::make_static;
 
+use crate::messagebuf::{format_display_string, DisplayOptions};
+
 mod display;
 mod error;
 mod messagebuf;
@@ -190,60 +192,6 @@ async fn fetch_data_task(stack: &'static Stack<cyw43::NetDriver<'static>>, contr
     }
 }
 
-fn format_display_string(
-    s: &String<TEXT_BUFFER_SIZE>,
-    display: &mut display::ST7735<
-        Spi<'_, embassy_rp::peripherals::SPI1, Blocking>,
-        Output<'_, embassy_rp::peripherals::PIN_8>,
-        Output<'_, embassy_rp::peripherals::PIN_12>,
-        Output<'_, embassy_rp::peripherals::PIN_9>,
-        Output<'_, embassy_rp::peripherals::PIN_13>,
-    >,
-) {
-    const HORIZONTAL_MARGIN: i32 = 4;
-    const LINE_HEIGHT: i32 = 15;
-    const VERTICAL_MARGIN_OUTER: i32 = 6;
-    const VERTICAL_MARGIN_INNER: i32 = 2;
-
-    // let mut s = s.as_str();
-    // let mut l = 0;
-
-    // while s.len() > 0 {
-    //     let end = min(TEXT_COLUMNS, s.len());
-    //     let (line, new_s) = s.split_at(end);
-    //     let position = Point::new(
-    //         HORIZONTAL_MARGIN,
-    //         VERTICAL_MARGIN_OUTER + (l * (VERTICAL_MARGIN_INNER + LINE_HEIGHT) + LINE_HEIGHT - 3),
-    //     );
-
-    //     Text::new(line, position, MESSAGE_TEXT_STYLE).draw(display).unwrap();
-
-    //     s = new_s;
-    //     l += 1;
-    // }
-    let textbox_style = TextBoxStyleBuilder::new()
-        .height_mode(HeightMode::Exact(VerticalOverdraw::Visible))
-        .alignment(HorizontalAlignment::Center)
-        .vertical_alignment(embedded_text::alignment::VerticalAlignment::Middle)
-        .build();
-
-    // Specify the bounding box. Note the 0px height. The `FitToText` height mode will
-    // measure and adjust the height of the text box in `into_styled()`.
-    let bounds = Rectangle::new(
-        Point::new(HORIZONTAL_MARGIN, VERTICAL_MARGIN_OUTER),
-        Size::new(
-            IMAGE_WIDTH as u32 - HORIZONTAL_MARGIN as u32 + 1,
-            IMAGE_HEIGHT as u32 - VERTICAL_MARGIN_OUTER as u32 + 1,
-        ),
-    );
-
-    // Create the text box and apply styling options.
-    let text_box = TextBox::with_textbox_style(s.as_str(), bounds, MESSAGE_TEXT_STYLE, textbox_style);
-
-    // Draw the text box.
-    text_box.draw(display).unwrap();
-}
-
 /// This task reads messages from the global `MESSAGES` struct and displays a new one every `MESSAGE_DURATION` seconds.
 /// TODO add some queue for status messages (wifi problems, can't find server, etc.) which have priority over `MESSAGES`.
 ///
@@ -265,11 +213,9 @@ async fn display_messages_task(
         let prio_message = with_timeout(MESSAGE_DISPLAY_DURATION, PRIO_MESSAGE_SIGNAL.wait()).await;
 
         if let Ok(prio_message) = prio_message {
-            display.clear(PRIO_MESSAGE_BG_COLOR).unwrap();
-            format_display_string(&prio_message, display);
+            format_display_string(&prio_message, DisplayOptions::PriorityMessage, display);
         } else {
             log::info!("Timeout! No priority message found.");
-            display.clear(MESSAGE_BG_COLOR).unwrap();
             log::info!("Acquiring mutex to read message buffer.");
             let guard = MESSAGES.lock().await;
             let messages = RefCell::borrow(&guard);
@@ -279,7 +225,7 @@ async fn display_messages_task(
                 match next_message.data {
                     DisplayMessage::Text(data) => {
                         log::info!("Showing a text message: {}", data.text.as_str());
-                        format_display_string(&data.text, display);
+                        format_display_string(&data.text, DisplayOptions::NormalMessage, display);
                     }
                     DisplayMessage::Image(data) => {
                         log::info!("Showing an image message.");
