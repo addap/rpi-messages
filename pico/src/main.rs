@@ -54,25 +54,20 @@ mod display;
 mod error;
 mod messagebuf;
 mod protocol;
+mod static_data;
 
 const INIT_LOGGING_WAIT: Duration = Duration::from_secs(2);
 const INIT_SPI_WAIT: Duration = Duration::from_millis(100);
 
 const DISPLAY_FREQ: u32 = 10_000_000;
-
 const MESSAGE_DISPLAY_DURATION: Duration = Duration::from_secs(5);
 const MESSAGE_FONT: mono_font::MonoFont = FONT_9X15;
 const MESSAGE_TEXT_COLOR: Rgb565 = Rgb565::BLACK;
 const MESSAGE_BG_COLOR: Rgb565 = Rgb565::WHITE;
 const PRIO_MESSAGE_BG_COLOR: Rgb565 = Rgb565::RED;
 const MESSAGE_TEXT_STYLE: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&MESSAGE_FONT, MESSAGE_TEXT_COLOR);
-
-const WIFI_SSID: &str = env!("WIFI_SSID");
-const WIFI_PASSWORD: &str = env!("WIFI_PASSWORD");
 const MESSAGE_FETCH_INTERVAL: Duration = Duration::from_secs(60);
 const SERVER_CONNECT_ERROR_WAIT: Duration = Duration::from_secs(2);
-
-pub static DEVICE_ID: u8 = 0;
 
 /// Global variable to hold message data retrieved from server. No persistence accross reboots.
 /// We need the async mutex because we want to do an async read call inside a critical section.
@@ -193,7 +188,6 @@ async fn fetch_data_task(stack: &'static Stack<cyw43::NetDriver<'static>>, contr
 }
 
 /// This task reads messages from the global `MESSAGES` struct and displays a new one every `MESSAGE_DURATION` seconds.
-/// TODO add some queue for status messages (wifi problems, can't find server, etc.) which have priority over `MESSAGES`.
 ///
 /// - `display`: a driver to interact with the display's ST7735 chip over SPI.
 #[embassy_executor::task]
@@ -368,8 +362,10 @@ async fn init_wifi(spawner: Spawner, pwr: PIN_23, cs: PIN_25, pio: PIO0, dio: PI
 
     spawner.spawn(net_task(stack)).unwrap();
 
+    let wifi_ssid = static_data::wifi_ssid().unwrap();
+    let wifi_pw = static_data::wifi_password().unwrap();
     loop {
-        match control.join_wpa2(WIFI_SSID, WIFI_PASSWORD).await {
+        match control.join_wpa2(wifi_ssid, wifi_pw).await {
             Ok(()) => {
                 log::info!("WIFI successfully connected.");
                 break;
