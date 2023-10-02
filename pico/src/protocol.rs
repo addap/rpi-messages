@@ -7,10 +7,9 @@ use embassy_time::Duration;
 use embedded_io_async::{Read, Write};
 use rpi_messages_common::{ClientCommand, MessageUpdate, UpdateResult, IMAGE_BUFFER_SIZE};
 
-use crate::static_data::DEVICE_ID;
+use crate::static_data::{DEVICE_ID, SERVER_ENDPOINT};
 
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(10);
-const SERVER_ENDPOINT: IpEndpoint = IpEndpoint::new(IpAddress::v4(192, 168, 12, 1), 1337);
 
 // rx_buffer must be large enough to hold a whole image, or alternatively we do streaming.
 static mut RX_BUFFER: [u8; IMAGE_BUFFER_SIZE] = [0; IMAGE_BUFFER_SIZE];

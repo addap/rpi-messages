@@ -1,5 +1,7 @@
 use core::ffi::CStr;
 
+use embassy_net::{IpAddress, IpEndpoint, Stack};
+
 pub static DEVICE_ID: u8 = 0;
 
 // #[link_section = ".wifi_info"]
@@ -7,8 +9,12 @@ pub static DEVICE_ID: u8 = 0;
 // #[link_section = ".wifi_info"]
 // static WIFI_PW_BYTES: [u8; 32] = *b"mysecretpw\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
 
-static WIFI_SSID_BYTES: [u8; 32] = *b"Buffalo-G-1337\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
-static WIFI_PW_BYTES: [u8; 32] = *b"mysecretpw\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+static WIFI_SSID_BYTES: [u8; 32] = *b"TP-Link_0FFC\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+static WIFI_PW_BYTES: [u8; 32] = *b"70667103\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+// static WIFI_SSID_BYTES: [u8; 32] = *b"Buffalo-G-1337\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+// static WIFI_PW_BYTES: [u8; 32] = *b"mysecretpw\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+
+pub static SERVER_ENDPOINT: IpEndpoint = IpEndpoint::new(IpAddress::v4(192, 168, 0, 194), 1337);
 
 pub fn wifi_ssid() -> Option<&'static str> {
     let cstr = match CStr::from_bytes_until_nul(&WIFI_SSID_BYTES) {
