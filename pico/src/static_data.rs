@@ -2,21 +2,27 @@ use core::ffi::CStr;
 
 use embassy_net::{IpAddress, IpEndpoint};
 
-pub static DEVICE_ID: u8 = 0;
+#[used]
+#[link_section = ".device_info"]
+pub static DEVICE_ID: u32 = 0xbabebabe;
 
-// #[link_section = ".wifi_info"]
-// static WIFI_SSID_BYTES: [u8; 32] = *b"TP-Link_0FFC\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
-// #[link_section = ".wifi_info"]
-// static WIFI_PW_BYTES: [u8; 32] = *b"70667103\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
-
-// pub static SERVER_ENDPOINT: IpEndpoint = IpEndpoint::new(IpAddress::v4(192, 168, 0, 194), 1337);
-
+#[used]
 #[link_section = ".wifi_info"]
-static WIFI_SSID_BYTES: [u8; 32] = *b"Buffalo-G-1337\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+pub static WIFI_SSID_BYTES: [u8; 32] = *b"Buffalo-G-1337\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+#[used]
 #[link_section = ".wifi_info"]
-static WIFI_PW_BYTES: [u8; 32] = *b"mysecretpw\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+pub static WIFI_PW_BYTES: [u8; 32] = *b"mysecretpw\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+#[used]
+#[link_section = ".wifi_info"]
+pub static SERVER_IP_BYTES: [u8; 4] = [192, 168, 12, 1];
+#[used]
+#[link_section = ".wifi_info"]
+pub static SERVER_PORT: u16 = 1337;
 
-pub static SERVER_ENDPOINT: IpEndpoint = IpEndpoint::new(IpAddress::v4(192, 168, 12, 1), 1337);
+#[inline(never)]
+pub fn device_id() -> u32 {
+    DEVICE_ID
+}
 
 pub fn wifi_ssid() -> Option<&'static str> {
     let cstr = match CStr::from_bytes_until_nul(&WIFI_SSID_BYTES) {
@@ -50,4 +56,14 @@ pub fn wifi_password() -> Option<&'static str> {
             None
         }
     }
+}
+
+pub fn server_endpoint() -> IpEndpoint {
+    let a0: u8 = SERVER_IP_BYTES[0];
+    let a1: u8 = SERVER_IP_BYTES[1];
+    let a2: u8 = SERVER_IP_BYTES[2];
+    let a3: u8 = SERVER_IP_BYTES[3];
+    let port = SERVER_PORT;
+
+    IpEndpoint::new(IpAddress::v4(a0, a1, a2, a3), port)
 }

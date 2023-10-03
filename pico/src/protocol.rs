@@ -2,12 +2,12 @@
 
 use cyw43::Control;
 use embassy_net::tcp::{ConnectError, TcpSocket};
-use embassy_net::{IpAddress, IpEndpoint, Stack};
+use embassy_net::Stack;
 use embassy_time::Duration;
 use embedded_io_async::{Read, Write};
 use rpi_messages_common::{ClientCommand, MessageUpdate, UpdateResult, IMAGE_BUFFER_SIZE};
 
-use crate::static_data::{DEVICE_ID, SERVER_ENDPOINT};
+use crate::static_data::{device_id, server_endpoint};
 
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -30,15 +30,16 @@ impl<'a> Protocol<'a> {
 
         // TODO what does setting the gpio here do?
         control.gpio_set(1, false).await;
-        log::info!("Connecting to server: {}", SERVER_ENDPOINT);
-        let connect_result = socket.connect(SERVER_ENDPOINT).await;
+        let server_endpoint = server_endpoint();
+        log::info!("Connecting to server: {}", server_endpoint);
+        let connect_result = socket.connect(server_endpoint).await;
         control.gpio_set(0, true).await;
 
         connect_result.and(Ok(Self { socket }))
     }
 
     pub async fn check_update(&mut self) -> Option<UpdateResult> {
-        let command_buf = ClientCommand::CheckUpdate(DEVICE_ID).serialize()?;
+        let command_buf = ClientCommand::CheckUpdate(device_id()).serialize()?;
         self.socket.write_all(&command_buf).await.unwrap();
 
         let mut reply_buf = [0u8; UpdateResult::SERIALIZED_LEN];

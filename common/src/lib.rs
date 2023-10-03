@@ -19,7 +19,7 @@ pub enum MessageUpdateKind {
     Text(u32),
 }
 
-type DeviceID = u8;
+type DeviceID = u32;
 type UpdateID = u32;
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
