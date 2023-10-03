@@ -2,6 +2,8 @@ use core::ffi::CStr;
 
 use embassy_net::{IpAddress, IpEndpoint};
 
+use crate::error::{Error, Result};
+
 #[used]
 #[link_section = ".device_info"]
 pub static DEVICE_ID: u32 = 0xbabebabe;
@@ -24,38 +26,26 @@ pub fn device_id() -> u32 {
     DEVICE_ID
 }
 
-pub fn wifi_ssid() -> Option<&'static str> {
-    let cstr = match CStr::from_bytes_until_nul(&WIFI_SSID_BYTES) {
-        Ok(cstr) => cstr,
-        Err(e) => {
-            log::error!("Parsing Wifi SSID failed: {}", e);
-            return None;
-        }
-    };
-    match cstr.to_str() {
-        Ok(wifi_ssid) => Some(wifi_ssid),
-        Err(e) => {
-            log::error!("Parsing Wifi SSID failed: {}", e);
-            None
-        }
-    }
+pub fn wifi_ssid() -> Result<&'static str> {
+    let cstr = CStr::from_bytes_until_nul(&WIFI_SSID_BYTES).map_err(|e| {
+        log::error!("Parsing Wifi SSID failed: {}", e);
+        Error::MemoryError
+    })?;
+    cstr.to_str().map_err(|e| {
+        log::error!("Parsing Wifi SSID failed: {}", e);
+        Error::MemoryError
+    })
 }
 
-pub fn wifi_password() -> Option<&'static str> {
-    let cstr = match CStr::from_bytes_until_nul(&WIFI_PW_BYTES) {
-        Ok(cstr) => cstr,
-        Err(e) => {
-            log::error!("Parsing Wifi password failed: {}", e);
-            return None;
-        }
-    };
-    match cstr.to_str() {
-        Ok(wifi_pw) => Some(wifi_pw),
-        Err(e) => {
-            log::error!("Parsing Wifi password failed: {}", e);
-            None
-        }
-    }
+pub fn wifi_password() -> Result<&'static str> {
+    let cstr = CStr::from_bytes_until_nul(&WIFI_PW_BYTES).map_err(|e| {
+        log::error!("Parsing Wifi password failed: {}", e);
+        Error::MemoryError
+    })?;
+    cstr.to_str().map_err(|e| {
+        log::error!("Parsing Wifi password failed: {}", e);
+        Error::MemoryError
+    })
 }
 
 pub fn server_endpoint() -> IpEndpoint {

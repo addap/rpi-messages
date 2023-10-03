@@ -1,7 +1,7 @@
 #![cfg_attr(target_arch = "arm", no_std)]
 
 use core::mem;
-use postcard;
+use postcard::{self, Result};
 use serde::{Deserialize, Serialize};
 
 /// We save images raw (TODO which endian-ness) so we use the exact screen dimensions.
@@ -76,44 +76,44 @@ impl MessageUpdate {
     /// So I just double the buffer and hope it works.
     pub const SERIALIZED_LEN: usize = 2 * mem::size_of::<Self>();
 
-    pub fn serialize(&self) -> Option<[u8; Self::SERIALIZED_LEN]> {
+    pub fn serialize(&self) -> Result<[u8; Self::SERIALIZED_LEN]> {
         let mut output = [0u8; Self::SERIALIZED_LEN];
-        postcard::to_slice(self, &mut output).ok()?;
+        postcard::to_slice(self, &mut output)?;
 
-        Some(output)
+        Ok(output)
     }
 
-    pub fn deserialize(&bytes: &[u8; Self::SERIALIZED_LEN]) -> Option<Self> {
-        postcard::from_bytes(&bytes).ok()
+    pub fn deserialize(&bytes: &[u8; Self::SERIALIZED_LEN]) -> Result<Self> {
+        postcard::from_bytes(&bytes)
     }
 }
 
 impl UpdateResult {
     pub const SERIALIZED_LEN: usize = 2 * mem::size_of::<Self>();
 
-    pub fn serialize(&self) -> Option<[u8; Self::SERIALIZED_LEN]> {
+    pub fn serialize(&self) -> Result<[u8; Self::SERIALIZED_LEN]> {
         let mut output = [0u8; Self::SERIALIZED_LEN];
-        postcard::to_slice(self, &mut output).ok()?;
+        postcard::to_slice(self, &mut output)?;
 
-        Some(output)
+        Ok(output)
     }
 
-    pub fn deserialize(&bytes: &[u8; Self::SERIALIZED_LEN]) -> Option<Self> {
-        postcard::from_bytes(&bytes).ok()
+    pub fn deserialize(&bytes: &[u8; Self::SERIALIZED_LEN]) -> Result<Self> {
+        postcard::from_bytes(&bytes)
     }
 }
 
 impl ClientCommand {
     pub const SERIALIZED_LEN: usize = 2 * mem::size_of::<Self>();
 
-    pub fn serialize(&self) -> Option<[u8; Self::SERIALIZED_LEN]> {
+    pub fn serialize(&self) -> Result<[u8; Self::SERIALIZED_LEN]> {
         let mut output = [0u8; Self::SERIALIZED_LEN];
-        postcard::to_slice(self, &mut output).ok()?;
+        postcard::to_slice(self, &mut output)?;
 
-        Some(output)
+        Ok(output)
     }
 
-    pub fn deserialize(&bytes: &[u8; Self::SERIALIZED_LEN]) -> Option<Self> {
-        postcard::from_bytes(&bytes).ok()
+    pub fn deserialize(&bytes: &[u8; Self::SERIALIZED_LEN]) -> Result<Self> {
+        postcard::from_bytes(&bytes)
     }
 }

@@ -227,28 +227,22 @@ impl Messages {
 
     /// Returns a pointer to the next message that should be overwritten.
     fn next_available_message<'a, T: MessageData>(messages: &'a mut [Message<T>]) -> &'a mut Message<T> {
+        assert!(messages.len() > 0);
+
         // We first check if there is any message that is currently not active, then we can just use that.
         // Otherwise we return the oldest active message, to be overwritten.
-        let mut inactive_index = None;
-        let mut oldest_updated_at = Instant::MAX;
-        let mut oldest_index = 0;
-
-        for (i, message) in messages.iter_mut().enumerate() {
-            if !message.meta.is_active() {
-                inactive_index = Some(i);
-            } else if message.meta.updated_at < oldest_updated_at {
-                oldest_index = i;
-                oldest_updated_at = message.meta.updated_at;
-            }
-        }
-
-        if let Some(inactive_index) = inactive_index {
-            return messages.get_mut(inactive_index).unwrap();
+        if let Some(inactive_index) = messages.iter_mut().position(|message| !message.meta.is_active()) {
+            // a.d. unwrap() cannot fail since `inactive_index` is a valid index.
+            messages.get_mut(inactive_index).unwrap()
         } else {
-            return messages.get_mut(oldest_index).unwrap();
+            // a.d. unwrap() cannot fail since messages is non-empty.
+            messages
+                .iter_mut()
+                .min_by_key(|message| message.meta.updated_at)
+                .unwrap()
         }
 
-        // TODO we use indices since the uncommented version below did not work because returning the pointer
+        // We use an index since the uncommented version below did not work because returning the pointer
         // makes the first iter_mut live for 'a, i.e. the whole function body so we cannot call iter_mut again.
         // I would have thought with NLL this already works but maybe it needs the more fine grained analysis of Polonius.
         // if let Some(message) = messages.iter_mut().find(|message| !message.is_active()) {
@@ -275,7 +269,7 @@ impl DisplayOptions {
 }
 
 pub fn format_display_string(
-    text: &String<TEXT_BUFFER_SIZE>,
+    text: &str,
     options: DisplayOptions,
     display: &mut display::ST7735<
         Spi<'_, embassy_rp::peripherals::SPI1, Blocking>,
@@ -304,9 +298,10 @@ pub fn format_display_string(
     );
 
     // Create the text box and apply styling options.
-    let text_box = TextBox::with_textbox_style(text.as_str(), bounds, MESSAGE_TEXT_STYLE, textbox_style);
+    let text_box = TextBox::with_textbox_style(text, bounds, MESSAGE_TEXT_STYLE, textbox_style);
 
     // Draw the text box.
+    // a.d. unwrap() cannot panic since our display implementation has `Infallibe` as the error type.
     display.clear(options.clear_style()).unwrap();
     text_box.draw(display).unwrap();
 }

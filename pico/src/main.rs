@@ -8,7 +8,6 @@
 #![feature(type_alias_impl_trait)]
 
 use core::cell::RefCell;
-use core::cmp::min;
 
 use cyw43::Control;
 use cyw43_pio::PioSpi;
@@ -27,28 +26,22 @@ use embassy_sync::signal::Signal;
 use embassy_time::{with_timeout, Delay, Duration, Instant, Timer};
 use embedded_graphics::draw_target::DrawTarget;
 use embedded_graphics::image::{Image, ImageRaw, ImageRawBE};
-use embedded_graphics::mono_font::ascii::{FONT_10X20, FONT_8X13, FONT_9X15};
+use embedded_graphics::mono_font::ascii::FONT_9X15;
 use embedded_graphics::mono_font::{self, MonoTextStyle};
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::Rectangle;
 use embedded_graphics::text::Text;
-use embedded_text::alignment::HorizontalAlignment;
-use embedded_text::style::{HeightMode, TextBoxStyleBuilder, VerticalOverdraw};
-use embedded_text::TextBox;
-use error::{Result, SoftError};
 use heapless::String;
-use messagebuf::{DisplayMessage, Messages};
-use protocol::Protocol;
 // use panic_probe as _;
 use rp2040_panic_usb_boot as _;
 use rpi_messages_common::{
-    MessageUpdateKind, UpdateResult, IMAGE_BUFFER_SIZE, IMAGE_HEIGHT, IMAGE_WIDTH, TEXT_BUFFER_SIZE, TEXT_COLUMNS,
+    MessageUpdate, MessageUpdateKind, UpdateResult, IMAGE_BUFFER_SIZE, IMAGE_HEIGHT, IMAGE_WIDTH, TEXT_BUFFER_SIZE,
 };
-// use st7735_lcd::{Orientation, ST7735};
 use static_cell::make_static;
 
-use crate::messagebuf::{format_display_string, DisplayOptions};
+use crate::error::{Error, Result};
+use crate::messagebuf::{format_display_string, DisplayMessage, DisplayOptions, Messages};
+use crate::protocol::Protocol;
 
 mod display;
 mod error;
@@ -109,6 +102,46 @@ async fn logger_task(driver: Driver<'static, USB>) {
 
 //// ----- Main tasks to implement the device features. -----
 
+async fn handle_update<'a>(update: MessageUpdate, protocol: &mut Protocol<'a>) -> Result<()> {
+    log::info!("Received an update. Acquiring mutex to change message buffer.");
+    let mut guard = MESSAGES.lock().await;
+    let mut messages = RefCell::borrow_mut(&mut guard);
+
+    match update.kind {
+        MessageUpdateKind::Text(size) => {
+            log::info!("Requesting text update.");
+            let message = messages.next_available_text();
+            message.set_meta(&update);
+
+            // Since we cannot access the underlying memory of the string directly, we allocate a
+            // new buffer here and push it into the string after verifying it is valid UTF-8.
+            let mut message_buf = [0u8; TEXT_BUFFER_SIZE];
+            let message_buf = &mut message_buf[..(size as usize)];
+            protocol.request_update(&update, message_buf).await?;
+
+            match core::str::from_utf8(message_buf) {
+                Ok(text) => {
+                    log::info!("Received text update: {}", text);
+                    // a.d. unwrap() cannot panic since text is at most `TEXT_BUFFER_SIZE` long and message.data is cleared in next_available_text.
+                    message.data.text.push_str(text).unwrap();
+                }
+                Err(e) => {
+                    return Err(Error::ServerMessage(e));
+                }
+            }
+        }
+        MessageUpdateKind::Image => {
+            log::info!("Requesting image update.");
+            let message = messages.next_available_image();
+            message.set_meta(&update);
+            let message_buf = message.data.image.as_mut();
+            protocol.request_update(&update, message_buf).await?;
+        }
+    };
+
+    Ok(())
+}
+
 /// This task connects to `MESSAGE_SERVER_ADDR` and fetches new messages to update the global `MESSAGES` struct.
 ///
 /// - `stack`: the network stack. Used to create sockets.
@@ -118,71 +151,40 @@ async fn fetch_data_task(stack: &'static Stack<cyw43::NetDriver<'static>>, contr
     let mut tx_buffer = [0; 256];
 
     loop {
-        // Nested block to drop protocol before we await the timeout.
-        {
-            log::info!("Creating new connection.");
-            let protocol_res = Protocol::new(stack, control, &mut tx_buffer).await;
-            let mut protocol = match protocol_res {
-                Ok(protocol) => protocol,
+        log::info!("Creating new connection.");
+        let protocol = Protocol::new(stack, control, &mut tx_buffer).await;
+        let mut protocol = match protocol {
+            Ok(protocol) => protocol,
+            Err(e) => {
+                handle_error(e);
+                Timer::after(SERVER_CONNECT_ERROR_WAIT).await;
+                continue;
+            }
+        };
+
+        let update_result = loop {
+            log::info!("Checking for updates");
+            match protocol.check_update().await {
                 Err(e) => {
-                    log::warn!("Connection error: {:?}", e);
-                    handle_soft_error(SoftError::ServerConnect(e));
-                    Timer::after(SERVER_CONNECT_ERROR_WAIT).await;
-                    continue;
+                    break Err(e);
                 }
-            };
-
-            loop {
-                log::info!("Checking for updates");
-                match protocol.check_update().await {
-                    None => {
-                        log::warn!("update parse error");
-                        break;
-                    }
-                    Some(UpdateResult::NoUpdate) => {
-                        log::info!("No updates for now. Sleeping.");
-                        break;
-                    }
-                    Some(UpdateResult::Update(update)) => {
-                        log::info!("Received an update. Acquiring mutex to change message buffer.");
-                        let mut guard = MESSAGES.lock().await;
-                        let mut messages = RefCell::borrow_mut(&mut guard);
-
-                        match update.kind {
-                            MessageUpdateKind::Text(size) => {
-                                log::info!("Requesting text update.");
-                                let message = messages.next_available_text();
-                                message.set_meta(&update);
-
-                                // Since we cannot access the underlying memory of the string directly, we allocate a
-                                // new buffer here and push it into the string after verifying it is valid UTF-8.
-                                let mut message_buf = [0u8; TEXT_BUFFER_SIZE];
-                                let message_buf = &mut message_buf[..(size as usize)];
-                                protocol.request_update(&update, message_buf).await;
-
-                                match core::str::from_utf8(message_buf) {
-                                    Ok(text) => {
-                                        log::info!("Received text update: {}", text);
-                                        message.data.text.push_str(text).unwrap();
-                                    }
-                                    Err(e) => {
-                                        log::warn!("Received invalid utf8 from server: {}", e);
-                                    }
-                                }
-                            }
-                            MessageUpdateKind::Image => {
-                                log::info!("Requesting image update.");
-                                let message = messages.next_available_image();
-                                message.set_meta(&update);
-                                let message_buf = message.data.image.as_mut();
-                                protocol.request_update(&update, message_buf).await;
-                            }
-                        }
+                Ok(UpdateResult::NoUpdate) => {
+                    log::info!("No updates for now. Sleeping.");
+                    break Ok(());
+                }
+                Ok(UpdateResult::Update(update)) => {
+                    if let Err(e) = handle_update(update, &mut protocol).await {
+                        break Err(e);
                     }
                 }
             }
-        }
+        };
 
+        drop(protocol);
+
+        if let Err(e) = update_result {
+            handle_error(e);
+        }
         Timer::after(MESSAGE_FETCH_INTERVAL).await;
     }
 }
@@ -224,24 +226,23 @@ async fn display_messages_task(
                     DisplayMessage::Image(data) => {
                         log::info!("Showing an image message.");
                         let raw: ImageRawBE<Rgb565> = ImageRaw::new(&data.image, IMAGE_WIDTH as u32);
+                        // a.d. unwrap() cannot panic since our display implementation has `Infallibe` as the error type.
                         Image::new(&raw, Point::zero()).draw(display).unwrap();
                     }
                 }
             } else {
-                Text::new("No messages :(", Point::new(20, 100), MESSAGE_TEXT_STYLE)
-                    .draw(display)
-                    .unwrap();
+                format_display_string("No messages :(", DisplayOptions::NormalMessage, display);
             }
         }
     }
 }
 
-fn handle_soft_error(e: SoftError) {
-    log::debug!("hse: Enter");
+fn handle_error(e: Error) {
+    log::debug!("he: Enter");
     let msg = e.to_string();
-    log::warn!("Handling soft error: {}", msg);
+    log::warn!("Handling error: {}", msg);
     PRIO_MESSAGE_SIGNAL.signal(msg);
-    log::debug!("hse: Exit");
+    log::debug!("he: Exit");
 }
 
 #[embassy_executor::main]
@@ -252,9 +253,11 @@ async fn main(spawner: Spawner) {
     init_display(
         spawner, p.PIN_8, p.PIN_9, p.SPI1, p.PIN_10, p.PIN_11, p.PIN_12, p.PIN_13,
     )
-    .await
-    .unwrap();
-    init_wifi(spawner, p.PIN_23, p.PIN_25, p.PIO0, p.PIN_24, p.PIN_29, p.DMA_CH0).await;
+    .await;
+    let wifi_result = init_wifi(spawner, p.PIN_23, p.PIN_25, p.PIO0, p.PIN_24, p.PIN_29, p.DMA_CH0).await;
+    if let Err(e) = wifi_result {
+        handle_error(e);
+    }
 
     log::info!("Finished configuration.");
 }
@@ -263,7 +266,9 @@ async fn main(spawner: Spawner) {
 async fn init_usb_logging(spawner: Spawner, usb: USB) {
     log::info!("USB Logging initialization start.");
     let driver = Driver::new(usb, Irqs);
-    spawner.spawn(logger_task(driver)).unwrap();
+    spawner
+        .spawn(logger_task(driver))
+        .expect("Spawning logger_task failed.");
 
     Timer::after(INIT_LOGGING_WAIT).await;
     log::info!("USB Logging initialization done.");
@@ -279,7 +284,7 @@ async fn init_display(
     mosi: PIN_11,
     rst: PIN_12,
     bl: PIN_13,
-) -> Result<()> {
+) {
     log::info!("Display initialization start.");
 
     // create SPI
@@ -317,19 +322,28 @@ async fn init_display(
     display.init(&mut Delay);
     // ST7735 is a 162 * 132 controller but it's connected to a 160 * 128 LCD, so we need to set an offset.
     display.set_offset(1, 2);
+    // a.d. unwrap() cannot panic since our display implementation has `Infallibe` as the error type.
     display.clear(PRIO_MESSAGE_BG_COLOR).unwrap();
     Text::new("Booting...", Point::new(10, 20), MESSAGE_TEXT_STYLE)
         .draw(&mut display)
         .unwrap();
 
-    spawner.spawn(display_messages_task(make_static!(display))).unwrap();
+    spawner
+        .spawn(display_messages_task(make_static!(display)))
+        .expect("Spawning display_messages_task failed.");
     log::info!("Display initialization end.");
-
-    Ok(())
 }
 
 /// ----- WIFI setup -----
-async fn init_wifi(spawner: Spawner, pwr: PIN_23, cs: PIN_25, pio: PIO0, dio: PIN_24, clk: PIN_29, dma: DMA_CH0) {
+async fn init_wifi(
+    spawner: Spawner,
+    pwr: PIN_23,
+    cs: PIN_25,
+    pio: PIO0,
+    dio: PIN_24,
+    clk: PIN_29,
+    dma: DMA_CH0,
+) -> Result<()> {
     log::info!("WIFI initialization start.");
     let fw = include_bytes!("../cyw43-firmware/43439A0.bin");
     let clm = include_bytes!("../cyw43-firmware/43439A0_clm.bin");
@@ -341,7 +355,7 @@ async fn init_wifi(spawner: Spawner, pwr: PIN_23, cs: PIN_25, pio: PIO0, dio: PI
 
     let state = make_static!(cyw43::State::new());
     let (net_device, mut control, runner) = cyw43::new(state, pwr, spi, fw).await;
-    spawner.spawn(wifi_task(runner)).unwrap();
+    spawner.spawn(wifi_task(runner)).expect("Spawning wifi_task failed.");
 
     control.init(clm).await;
     // a.d. TODO check which power management mode I want.
@@ -360,10 +374,10 @@ async fn init_wifi(spawner: Spawner, pwr: PIN_23, cs: PIN_25, pio: PIO0, dio: PI
         seed
     ));
 
-    spawner.spawn(net_task(stack)).unwrap();
+    spawner.spawn(net_task(stack)).expect("Spawning net_task failed.");
 
-    let wifi_ssid = static_data::wifi_ssid().unwrap();
-    let wifi_pw = static_data::wifi_password().unwrap();
+    let wifi_ssid = static_data::wifi_ssid()?;
+    let wifi_pw = static_data::wifi_password()?;
     log::info!("Connecting to Wifi '{}' with password '{}'", wifi_ssid, wifi_pw);
 
     loop {
@@ -374,11 +388,15 @@ async fn init_wifi(spawner: Spawner, pwr: PIN_23, cs: PIN_25, pio: PIO0, dio: PI
             }
             Err(e) => {
                 log::info!("WIFI connection failed with status={}", e.status);
-                handle_soft_error(SoftError::WifiConnect(e));
+                handle_error(Error::WifiConnect(e));
             }
         }
     }
 
-    spawner.spawn(fetch_data_task(stack, make_static!(control))).unwrap();
+    spawner
+        .spawn(fetch_data_task(stack, make_static!(control)))
+        .expect("Spawning fetch_data_task failed.");
     log::info!("WIFI initialization end.");
+
+    Ok(())
 }
