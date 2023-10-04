@@ -8,6 +8,7 @@
 #![feature(type_alias_impl_trait)]
 
 use core::cell::RefCell;
+use core::future::pending;
 
 use cyw43::Control;
 use cyw43_pio::PioSpi;
@@ -39,9 +40,10 @@ use rpi_messages_common::{
 };
 use static_cell::make_static;
 
-use crate::error::{Error, Result};
+use crate::error::{handle_error, Error, Result};
 use crate::messagebuf::{format_display_string, DisplayMessage, DisplayOptions, Messages};
 use crate::protocol::Protocol;
+use crate::static_data::device_id;
 
 mod display;
 mod error;
@@ -237,27 +239,19 @@ async fn display_messages_task(
     }
 }
 
-fn handle_error(e: Error) {
-    log::debug!("he: Enter");
-    let msg = e.to_string();
-    log::warn!("Handling error: {}", msg);
-    PRIO_MESSAGE_SIGNAL.signal(msg);
-    log::debug!("he: Exit");
-}
-
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
 
     init_usb_logging(spawner, p.USB).await;
+
+    log::info!("Booting device with ID: 0x{:08x}", device_id());
+
     init_display(
         spawner, p.PIN_8, p.PIN_9, p.SPI1, p.PIN_10, p.PIN_11, p.PIN_12, p.PIN_13,
     )
     .await;
-    let wifi_result = init_wifi(spawner, p.PIN_23, p.PIN_25, p.PIO0, p.PIN_24, p.PIN_29, p.DMA_CH0).await;
-    if let Err(e) = wifi_result {
-        handle_error(e);
-    }
+    init_wifi(spawner, p.PIN_23, p.PIN_25, p.PIO0, p.PIN_24, p.PIN_29, p.DMA_CH0).await;
 
     log::info!("Finished configuration.");
 }
@@ -335,15 +329,7 @@ async fn init_display(
 }
 
 /// ----- WIFI setup -----
-async fn init_wifi(
-    spawner: Spawner,
-    pwr: PIN_23,
-    cs: PIN_25,
-    pio: PIO0,
-    dio: PIN_24,
-    clk: PIN_29,
-    dma: DMA_CH0,
-) -> Result<()> {
+async fn init_wifi(spawner: Spawner, pwr: PIN_23, cs: PIN_25, pio: PIO0, dio: PIN_24, clk: PIN_29, dma: DMA_CH0) {
     log::info!("WIFI initialization start.");
     let fw = include_bytes!("../cyw43-firmware/43439A0.bin");
     let clm = include_bytes!("../cyw43-firmware/43439A0_clm.bin");
@@ -376,8 +362,22 @@ async fn init_wifi(
 
     spawner.spawn(net_task(stack)).expect("Spawning net_task failed.");
 
-    let wifi_ssid = static_data::wifi_ssid()?;
-    let wifi_pw = static_data::wifi_password()?;
+    let wifi_ssid = match static_data::wifi_ssid() {
+        Some(wifi_ssid) => wifi_ssid,
+        None => {
+            handle_error(Error::MemoryError);
+            pending().await
+        }
+    };
+
+    let wifi_pw = match static_data::wifi_password() {
+        Some(wifi_pw) => wifi_pw,
+        None => {
+            handle_error(Error::MemoryError);
+            pending().await
+        }
+    };
+
     log::info!("Connecting to Wifi '{}' with password '{}'", wifi_ssid, wifi_pw);
 
     loop {
@@ -397,6 +397,4 @@ async fn init_wifi(
         .spawn(fetch_data_task(stack, make_static!(control)))
         .expect("Spawning fetch_data_task failed.");
     log::info!("WIFI initialization end.");
-
-    Ok(())
 }

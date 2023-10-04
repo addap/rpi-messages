@@ -1,16 +1,18 @@
 use core::fmt::Write;
+use core::future::pending;
 use core::str::Utf8Error;
 
 use embassy_net::tcp::ConnectError;
 use heapless::String;
 use rpi_messages_common::TEXT_BUFFER_SIZE;
 
+use crate::PRIO_MESSAGE_SIGNAL;
+
 pub type Result<T> = core::result::Result<T, Error>;
 
 pub enum Error {
     WifiConnect(cyw43::ControlError),
     ServerConnect(ConnectError),
-    SpiError(embassy_rp::spi::Error),
     Socket,
     Serialize(postcard::Error),
     ServerMessage(Utf8Error),
@@ -22,7 +24,6 @@ impl core::fmt::Debug for Error {
         match self {
             Error::WifiConnect(e) => f.debug_tuple("WifiConnect").field(e).finish(),
             Error::ServerConnect(e) => f.debug_tuple("ServerConnect").field(e).finish(),
-            Error::SpiError(e) => f.debug_tuple("SPI").field(e).finish(),
             Error::Socket => f.write_str("Socket"),
             Error::Serialize(e) => f.debug_tuple("Serialize").field(e).finish(),
             Error::ServerMessage(e) => f.debug_tuple("ServerMessage").field(e).finish(),
@@ -37,7 +38,6 @@ impl Error {
         let write_result = match self {
             Error::WifiConnect(_) => write!(&mut s, "Cannot connect to Wifi. Please check Wifi settings."),
             Error::ServerConnect(e) => write!(&mut s, "Can't connect to server: {:?}", e),
-            Error::SpiError(_) => write!(&mut s, "Internal SPI error."),
             Error::Socket | Error::Socket => write!(&mut s, "Internal socket error."),
             Error::Serialize(_) => write!(&mut s, "Internal serialization error."),
             Error::ServerMessage(_) => write!(&mut s, "Malformed message from server."),
@@ -46,9 +46,20 @@ impl Error {
 
         if write_result.is_err() {
             s.clear();
-            s.push_str("Error::to_string error.");
+            const ERROR_TOO_LONG: &str = "Error::to_string error.";
+            const _: () = assert!(ERROR_TOO_LONG.len() <= TEXT_BUFFER_SIZE);
+            // a.d. unwrap() cannot panic since the message is shorter than `TEXT_BUFFER_SIZE`.
+            s.push_str(ERROR_TOO_LONG).unwrap();
         }
 
         s
     }
+}
+
+pub fn handle_error(e: Error) {
+    log::debug!("he: Enter");
+    let msg = e.to_string();
+    log::warn!("Handling error: {}", msg);
+    PRIO_MESSAGE_SIGNAL.signal(msg);
+    log::debug!("he: Exit");
 }
