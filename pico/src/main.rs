@@ -36,7 +36,7 @@ use heapless::String;
 // use panic_probe as _;
 use rp2040_panic_usb_boot as _;
 use rpi_messages_common::{
-    MessageUpdate, MessageUpdateKind, UpdateResult, IMAGE_BUFFER_SIZE, IMAGE_HEIGHT, IMAGE_WIDTH, TEXT_BUFFER_SIZE,
+    MessageUpdate, MessageUpdateKind, UpdateResult, IMAGE_HEIGHT, IMAGE_WIDTH, TEXT_BUFFER_SIZE,
 };
 use static_cell::make_static;
 
@@ -68,10 +68,6 @@ const SERVER_CONNECT_ERROR_WAIT: Duration = Duration::from_secs(2);
 /// We need the async mutex because we want to do an async read call inside a critical section.
 static MESSAGES: Mutex<CriticalSectionRawMutex, RefCell<Messages>> = Mutex::new(RefCell::new(Messages::new()));
 static PRIO_MESSAGE_SIGNAL: Signal<CriticalSectionRawMutex, String<TEXT_BUFFER_SIZE>> = Signal::new();
-
-static mut FB: [u8; IMAGE_BUFFER_SIZE] = [0u8; IMAGE_BUFFER_SIZE];
-
-// static imo: &'static [u8; IMAGE_BUFFER_SIZE] = include_bytes!("../../../pictures/loveimo.bin");
 
 // TODO why do we need this?
 // It seems to associate a type of interrupt that the CPU knows about with a handler (so maybe populating the interrupt vector?)
@@ -300,18 +296,7 @@ async fn init_display(
     let bl = Output::new(bl, Level::High);
 
     // Create display driver which takes care of sending messages to the display.
-    // SAFETY - we only borrow the framebuffer once in this setup procedure, so there will never be multiple mutable references.
-    let fbr: &'static mut [u8; IMAGE_BUFFER_SIZE] = unsafe { &mut FB };
-    let mut display = display::ST7735::new(
-        spi,
-        dcx,
-        rst,
-        display_cs,
-        bl,
-        fbr,
-        IMAGE_WIDTH as u8,
-        IMAGE_HEIGHT as u8,
-    );
+    let mut display = display::ST7735::new(spi, dcx, rst, display_cs, bl, IMAGE_WIDTH as u8, IMAGE_HEIGHT as u8);
 
     display.init(&mut Delay);
     // ST7735 is a 162 * 132 controller but it's connected to a 160 * 128 LCD, so we need to set an offset.

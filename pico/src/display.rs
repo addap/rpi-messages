@@ -8,7 +8,6 @@ use embedded_graphics::primitives::{PointsIter, Rectangle};
 use embedded_graphics::Pixel;
 use embedded_hal_02::blocking::delay::DelayMs;
 use embedded_hal_02::blocking::spi;
-use rpi_messages_common::IMAGE_BUFFER_SIZE;
 
 pub trait OutputPin: embedded_hal_02::digital::v2::OutputPin<Error = Infallible> {}
 impl<T> OutputPin for T where T: embedded_hal_02::digital::v2::OutputPin<Error = Infallible> {}
@@ -39,9 +38,6 @@ where
     /// Backlight pin.
     _bl: BL,
 
-    /// Frame buffer.
-    buffer: &'static mut [u8; IMAGE_BUFFER_SIZE],
-
     width: u8,
     height: u8,
     dx: u8,
@@ -56,23 +52,13 @@ where
     CS: OutputPin,
     BL: OutputPin,
 {
-    pub fn new(
-        spi: SPI,
-        dc: DC,
-        rst: RST,
-        cs: CS,
-        bl: BL,
-        buffer: &'static mut [u8; IMAGE_BUFFER_SIZE],
-        width: u8,
-        height: u8,
-    ) -> Self {
+    pub fn new(spi: SPI, dc: DC, rst: RST, cs: CS, bl: BL, width: u8, height: u8) -> Self {
         Self {
             spi,
             dc,
             rst,
             cs,
             _bl: bl,
-            buffer,
             dx: 0,
             dy: 0,
             width,
@@ -244,12 +230,6 @@ where
         self.write_cmd(0x29)
     }
 
-    pub fn fill(&mut self, new: &[u8; IMAGE_BUFFER_SIZE]) {
-        for i in 0..IMAGE_BUFFER_SIZE {
-            self.buffer[i] = new[i];
-        }
-    }
-
     fn set_address_window(&mut self, sx: u8, sy: u8, ex: u8, ey: u8) {
         self.write_cmd(0x2A);
         self.write_data(0);
@@ -272,17 +252,6 @@ where
         self.dc.set_high().unwrap();
         self.cs.set_low().unwrap();
         self.spi.write(&color.to_be_bytes()).unwrap();
-        self.cs.set_high().unwrap();
-    }
-
-    pub fn show(&mut self) {
-        self.set_address_window(0, 0, self.width - 1, self.height - 1);
-        self.write_cmd(0x2C);
-
-        self.cs.set_high().unwrap();
-        self.dc.set_high().unwrap();
-        self.cs.set_low().unwrap();
-        self.spi.write(self.buffer).unwrap();
         self.cs.set_high().unwrap();
     }
 }
