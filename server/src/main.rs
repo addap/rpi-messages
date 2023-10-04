@@ -1,3 +1,4 @@
+use postcard::Result;
 use rpi_messages_common::{
     ClientCommand, MessageUpdate, MessageUpdateKind, UpdateResult, IMAGE_BUFFER_SIZE,
 };
@@ -98,5 +99,5 @@ fn main() {
 fn parse_client_command(socket: &mut TcpStream) -> Option<ClientCommand> {
     let mut command_buf = [0u8; ClientCommand::SERIALIZED_LEN];
     socket.read_exact(&mut command_buf).ok()?;
-    ClientCommand::deserialize(&command_buf)
+    ClientCommand::deserialize(&command_buf).ok()
 }
