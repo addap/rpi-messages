@@ -1,5 +1,4 @@
 use core::fmt::Write;
-use core::future::pending;
 use core::str::Utf8Error;
 
 use embassy_net::tcp::ConnectError;
@@ -37,8 +36,8 @@ impl Error {
         let mut s = String::new();
         let write_result = match self {
             Error::WifiConnect(_) => write!(&mut s, "Cannot connect to Wifi. Please check Wifi settings."),
-            Error::ServerConnect(e) => write!(&mut s, "Can't connect to server: {:?}", e),
-            Error::Socket | Error::Socket => write!(&mut s, "Internal socket error."),
+            Error::ServerConnect(_) => write!(&mut s, "Can't connect to server. Please check Wifi connection."),
+            Error::Socket => write!(&mut s, "Internal socket error."),
             Error::Serialize(_) => write!(&mut s, "Internal serialization error."),
             Error::ServerMessage(_) => write!(&mut s, "Malformed message from server."),
             Error::MemoryError => write!(&mut s, "Cannot read Wifi data. Please check Wifi settings."),
