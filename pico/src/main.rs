@@ -33,7 +33,11 @@ use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
 use embedded_graphics::text::Text;
 use heapless::String;
-// use panic_probe as _;
+/// In deploy mode we just want to reboot the device.
+#[cfg(feature = "deploy")]
+use panic_reset as _;
+/// In development mode we want to be able to flash it again.
+#[cfg(not(feature = "deploy"))]
 use rp2040_panic_usb_boot as _;
 use rpi_messages_common::{
     MessageUpdate, MessageUpdateKind, UpdateResult, IMAGE_HEIGHT, IMAGE_WIDTH, TEXT_BUFFER_SIZE,
