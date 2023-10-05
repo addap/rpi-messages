@@ -91,6 +91,13 @@ impl MessageUpdate {
 impl UpdateResult {
     pub const SERIALIZED_LEN: usize = 2 * mem::size_of::<Self>();
 
+    fn is_valid(&self) -> bool {
+        match self {
+            UpdateResult::NoUpdate => true,
+            UpdateResult::Update(message_update) => message_update.kind.is_valid(),
+        }
+    }
+
     pub fn serialize(&self) -> Result<[u8; Self::SERIALIZED_LEN]> {
         let mut output = [0u8; Self::SERIALIZED_LEN];
         postcard::to_slice(self, &mut output)?;
@@ -99,7 +106,13 @@ impl UpdateResult {
     }
 
     pub fn deserialize(&bytes: &[u8; Self::SERIALIZED_LEN]) -> Result<Self> {
-        postcard::from_bytes(&bytes)
+        let update_result: UpdateResult = postcard::from_bytes(&bytes)?;
+
+        if update_result.is_valid() {
+            Ok(update_result)
+        } else {
+            Err(postcard::Error::SerdeDeCustom)
+        }
     }
 }
 

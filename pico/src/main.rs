@@ -114,6 +114,7 @@ async fn handle_update<'a>(update: MessageUpdate, protocol: &mut Protocol<'a>) -
             // Since we cannot access the underlying memory of the string directly, we allocate a
             // new buffer here and push it into the string after verifying it is valid UTF-8.
             let mut message_buf = [0u8; TEXT_BUFFER_SIZE];
+            // a.d. index cannot panic since size is checked to be less than `TEXT_BUFFER_SIZE` during deserialization.
             let message_buf = &mut message_buf[..(size as usize)];
             protocol.request_update(&update, message_buf).await?;
 
