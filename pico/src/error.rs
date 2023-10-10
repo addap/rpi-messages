@@ -11,6 +11,7 @@ pub type Result<T> = core::result::Result<T, Error>;
 
 pub enum Error {
     WifiConnect(cyw43::ControlError),
+    WifiConfiguration,
     ServerConnect(ConnectError),
     Socket,
     Serialize(postcard::Error),
@@ -22,6 +23,7 @@ impl core::fmt::Debug for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Error::WifiConnect(e) => f.debug_tuple("WifiConnect").field(e).finish(),
+            Error::WifiConfiguration => f.write_str("WifiConfiguration"),
             Error::ServerConnect(e) => f.debug_tuple("ServerConnect").field(e).finish(),
             Error::Socket => f.write_str("Socket"),
             Error::Serialize(e) => f.debug_tuple("Serialize").field(e).finish(),
@@ -41,6 +43,7 @@ impl Error {
             Error::Serialize(_) => write!(&mut s, "Internal serialization error."),
             Error::ServerMessage(_) => write!(&mut s, "Malformed message from server."),
             Error::MemoryError => write!(&mut s, "Cannot read Wifi data. Please check Wifi settings."),
+            Error::WifiConfiguration => write!(&mut s, "Wifi settings are not configured yet. Please flash uf2."),
         };
 
         if write_result.is_err() {

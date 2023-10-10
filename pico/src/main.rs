@@ -353,7 +353,14 @@ async fn init_wifi(spawner: Spawner, pwr: PIN_23, cs: PIN_25, pio: PIO0, dio: PI
     spawner.spawn(net_task(stack)).expect("Spawning net_task failed.");
 
     let wifi_ssid = match static_data::wifi_ssid() {
-        Some(wifi_ssid) => wifi_ssid,
+        Some(wifi_ssid) => {
+            if wifi_ssid.is_empty() {
+                handle_error(Error::WifiConfiguration);
+                pending().await
+            } else {
+                wifi_ssid
+            }
+        }
         None => {
             handle_error(Error::MemoryError);
             pending().await
@@ -361,7 +368,14 @@ async fn init_wifi(spawner: Spawner, pwr: PIN_23, cs: PIN_25, pio: PIO0, dio: PI
     };
 
     let wifi_pw = match static_data::wifi_password() {
-        Some(wifi_pw) => wifi_pw,
+        Some(wifi_pw) => {
+            if wifi_pw.is_empty() {
+                handle_error(Error::WifiConfiguration);
+                pending().await
+            } else {
+                wifi_pw
+            }
+        }
         None => {
             handle_error(Error::MemoryError);
             pending().await

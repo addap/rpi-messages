@@ -30,13 +30,13 @@ pub static mut DEVICE_ID: u32 = 0xbabebabe;
 
 #[used]
 #[link_section = ".wifi_info"]
-pub static mut WIFI_SSID_BYTES: [u8; 32] = *b"Buffalo-G-1337\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+pub static mut WIFI_SSID_BYTES: [u8; 32] = *b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
 #[used]
 #[link_section = ".wifi_info"]
-pub static mut WIFI_PW_BYTES: [u8; 32] = *b"mysecretpw\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+pub static mut WIFI_PW_BYTES: [u8; 32] = *b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
 #[used]
 #[link_section = ".wifi_info"]
-pub static mut SERVER_IP_BYTES: [u8; 4] = [192, 168, 12, 1];
+pub static mut SERVER_IP_BYTES: [u8; 4] = [202, 61, 254, 108];
 #[used]
 #[link_section = ".wifi_info"]
 pub static mut SERVER_PORT: u16 = 1337;
