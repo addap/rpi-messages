@@ -19,8 +19,8 @@ pub enum MessageUpdateKind {
     Text(u32),
 }
 
-type DeviceID = u32;
-type UpdateID = u32;
+pub type DeviceID = u32;
+pub type UpdateID = u32;
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct MessageUpdate {
