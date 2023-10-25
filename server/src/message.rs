@@ -12,37 +12,23 @@ use std::{
 };
 
 use image::{imageops::resize, EncodableLayout, ImageBuffer, RgbImage};
-use rpi_messages_common::{DeviceID, UpdateID, TEXT_BUFFER_SIZE};
+use rpi_messages_common::{DeviceID, MessageUpdateKind, UpdateID, TEXT_BUFFER_SIZE};
 use rpi_messages_common::{IMAGE_BYTES_PER_PIXEL, IMAGE_HEIGHT, IMAGE_WIDTH};
 use serde::{Deserialize, Serialize};
 
-type Result<T> = std::result::Result<T, anyhow::Error>;
+use crate::Result;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-enum SenderID {
+pub enum SenderID {
     Web,
     Wechat,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-enum MessageContent {
+pub enum MessageContent {
     Text(String),
     Image(Vec<u8>),
 }
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Message {
-    uuid: UpdateID,
-    receiver_id: DeviceID,
-    sender_id: SenderID,
-    delivered: bool,
-    created_at: chrono::NaiveDateTime,
-    lifetime_secs: u32,
-    content: MessageContent,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Messages(Vec<Message>);
 
 impl MessageContent {
     fn new_text(text: String) -> Result<Vec<Self>> {
@@ -61,14 +47,50 @@ impl MessageContent {
     }
 
     fn new_image(img: RgbImage) -> Result<Self> {
-        let bytes = convert_image(img);
+        let img = resize(
+            &img,
+            IMAGE_WIDTH as u32,
+            IMAGE_HEIGHT as u32,
+            image::imageops::FilterType::Gaussian,
+        );
+
+        let mut bytes = Vec::with_capacity(IMAGE_HEIGHT * IMAGE_WIDTH * IMAGE_BYTES_PER_PIXEL);
+        for px in img.pixels() {
+            let [r, g, b] = px.0;
+
+            let [c1, c2] = rgb565::Rgb565::from_srgb888_components(r, g, b).to_rgb565_be();
+            bytes.push(c1);
+            bytes.push(c2);
+        }
         Ok(MessageContent::Image(bytes))
     }
 }
 
+impl Into<MessageUpdateKind> for &MessageContent {
+    fn into(self) -> MessageUpdateKind {
+        match self {
+            MessageContent::Text(text) => MessageUpdateKind::Text(text.len() as u32),
+            MessageContent::Image(_) => MessageUpdateKind::Image,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Message {
+    pub id: UpdateID,
+    pub receiver_id: DeviceID,
+    pub sender_id: SenderID,
+    pub created_at: chrono::NaiveDateTime,
+    pub lifetime_secs: u32,
+    pub content: MessageContent,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct Messages(Vec<Message>);
+
 impl Message {
     fn new(
-        uuid: UpdateID,
+        id: UpdateID,
         receiver_id: DeviceID,
         sender_id: SenderID,
         created_at: chrono::NaiveDateTime,
@@ -76,10 +98,9 @@ impl Message {
         content: MessageContent,
     ) -> Self {
         Self {
-            uuid,
+            id,
             receiver_id,
             sender_id,
-            delivered: false,
             created_at,
             lifetime_secs: lifetime.num_seconds() as u32,
             content,
@@ -88,13 +109,21 @@ impl Message {
 }
 
 impl Messages {
-    fn load(p: &Path) -> Result<Self> {
+    pub const fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    fn load_file(p: &Path) -> Result<Self> {
         let file = File::open(p)?;
         let messages = serde_json::from_reader(&file)?;
         Ok(messages)
     }
 
-    fn store(&self, p: &Path) -> Result<()> {
+    pub fn load(p: &Path) -> Self {
+        Self::load_file(p).unwrap_or(Self::new())
+    }
+
+    pub fn store(&self, p: &Path) -> Result<()> {
         let file = OpenOptions::new().write(true).create(true).open(p)?;
         serde_json::to_writer(&file, self)?;
         Ok(())
@@ -104,29 +133,17 @@ impl Messages {
         self.0.push(message)
     }
 
-    fn find_next_message(&mut self, receiver_id: DeviceID) -> Option<&mut Message> {
+    pub fn get_next_message(
+        &self,
+        receiver_id: DeviceID,
+        after: Option<UpdateID>,
+    ) -> Option<&Message> {
         self.0
-            .iter_mut()
-            .find(|msg| !msg.delivered && msg.receiver_id == receiver_id)
+            .iter()
+            .find(|message| message.receiver_id == receiver_id && Some(message.id) > after)
     }
-}
 
-fn convert_image(img: RgbImage) -> Vec<u8> {
-    //
-    let img = resize(
-        &img,
-        IMAGE_WIDTH as u32,
-        IMAGE_HEIGHT as u32,
-        image::imageops::FilterType::Gaussian,
-    );
-
-    let mut bytes = Vec::with_capacity(IMAGE_HEIGHT * IMAGE_WIDTH * IMAGE_BYTES_PER_PIXEL);
-    for px in img.pixels() {
-        let [r, g, b] = px.0;
-
-        let [c1, c2] = rgb565::Rgb565::from_srgb888_components(r, g, b).to_rgb565_be();
-        bytes.push(c1);
-        bytes.push(c2);
+    pub fn get_message(&self, id: UpdateID) -> Option<&Message> {
+        self.0.iter().find(|message| message.id == id)
     }
-    bytes
 }

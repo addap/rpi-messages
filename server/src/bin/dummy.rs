@@ -22,7 +22,7 @@ fn main() {
 
                 while let Some(command) = parse_client_command(&mut socket) {
                     match command {
-                        ClientCommand::CheckUpdate(device_id) => {
+                        ClientCommand::CheckUpdate(device_id, _) => {
                             let result = match stage {
                                 0 => {
                                     println!("Got check for update. Sending text.");
@@ -30,13 +30,13 @@ fn main() {
                                         UpdateResult::Update(MessageUpdate {
                                             lifetime_sec: 60 * 100,
                                             kind: MessageUpdateKind::Text(TEXT1.len() as u32),
-                                            uuid: 0,
+                                            id: 0,
                                         })
                                     } else {
                                         UpdateResult::Update(MessageUpdate {
                                             lifetime_sec: 60 * 100,
                                             kind: MessageUpdateKind::Text(TEXT2.len() as u32),
-                                            uuid: 2,
+                                            id: 2,
                                         })
                                     }
                                 }
@@ -46,13 +46,13 @@ fn main() {
                                         UpdateResult::Update(MessageUpdate {
                                             lifetime_sec: 60 * 100,
                                             kind: MessageUpdateKind::Image,
-                                            uuid: 1,
+                                            id: 1,
                                         })
                                     } else {
                                         UpdateResult::Update(MessageUpdate {
                                             lifetime_sec: 60 * 100,
                                             kind: MessageUpdateKind::Image,
-                                            uuid: 3,
+                                            id: 3,
                                         })
                                     }
                                 }
@@ -67,7 +67,7 @@ fn main() {
 
                             stage += 1;
                         }
-                        ClientCommand::RequestUpdate(uuid) => match uuid {
+                        ClientCommand::RequestUpdate(id) => match id {
                             0 => {
                                 println!("Got request for update text.");
                                 socket.write_all(TEXT1.as_bytes()).unwrap()
