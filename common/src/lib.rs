@@ -25,7 +25,7 @@ pub type UpdateID = u32;
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct MessageUpdate {
     pub lifetime_sec: u32,
-    pub uuid: UpdateID,
+    pub id: UpdateID,
     pub kind: MessageUpdateKind,
 }
 
@@ -37,7 +37,7 @@ pub enum UpdateResult {
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub enum ClientCommand {
-    CheckUpdate(DeviceID),
+    CheckUpdate(DeviceID, Option<UpdateID>),
     RequestUpdate(UpdateID),
 }
 

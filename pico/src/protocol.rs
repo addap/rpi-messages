@@ -5,7 +5,7 @@ use embassy_net::tcp::TcpSocket;
 use embassy_net::Stack;
 use embassy_time::Duration;
 use embedded_io_async::{Read, Write};
-use rpi_messages_common::{ClientCommand, MessageUpdate, UpdateResult, IMAGE_BUFFER_SIZE};
+use rpi_messages_common::{ClientCommand, MessageUpdate, UpdateID, UpdateResult, IMAGE_BUFFER_SIZE};
 
 use crate::error::Error;
 use crate::static_data::{device_id, server_endpoint};
@@ -43,8 +43,8 @@ impl<'a> Protocol<'a> {
         connect_result.and(Ok(Self { socket }))
     }
 
-    pub async fn check_update(&mut self) -> Result<UpdateResult> {
-        let command_buf = ClientCommand::CheckUpdate(device_id())
+    pub async fn check_update(&mut self, after: Option<UpdateID>) -> Result<UpdateResult> {
+        let command_buf = ClientCommand::CheckUpdate(device_id(), after)
             .serialize()
             .map_err(|e| Error::Serialize(e))?;
         self.socket.write_all(&command_buf).await.map_err(|_| Error::Socket)?;
@@ -63,7 +63,7 @@ impl<'a> Protocol<'a> {
         assert!(message_buf.len() > 0);
         assert!(update.kind.size() > 0);
 
-        let command_buf = ClientCommand::RequestUpdate(update.uuid)
+        let command_buf = ClientCommand::RequestUpdate(update.id)
             .serialize()
             .map_err(|e| Error::Serialize(e))?;
         self.socket.write_all(&command_buf).await.map_err(|_| Error::Socket)?;

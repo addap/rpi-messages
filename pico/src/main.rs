@@ -8,6 +8,7 @@
 #![feature(type_alias_impl_trait)]
 
 use core::cell::RefCell;
+use core::cmp;
 use core::future::pending;
 
 use cyw43::Control;
@@ -153,6 +154,9 @@ async fn handle_update<'a>(update: MessageUpdate, protocol: &mut Protocol<'a>) -
 async fn fetch_data_task(stack: &'static Stack<cyw43::NetDriver<'static>>, control: &'static mut Control<'static>) {
     let mut tx_buffer = [0; 256];
 
+    // We save the id of the latest message we received to send to the server for the next update check.
+    let mut last_message_id = None;
+
     loop {
         log::info!("Creating new connection.");
         let protocol = Protocol::new(stack, control, &mut tx_buffer).await;
@@ -167,7 +171,7 @@ async fn fetch_data_task(stack: &'static Stack<cyw43::NetDriver<'static>>, contr
 
         let update_result = loop {
             log::info!("Checking for updates");
-            match protocol.check_update().await {
+            match protocol.check_update(last_message_id).await {
                 Err(e) => {
                     break Err(e);
                 }
@@ -175,11 +179,13 @@ async fn fetch_data_task(stack: &'static Stack<cyw43::NetDriver<'static>>, contr
                     log::info!("No updates for now. Sleeping.");
                     break Ok(());
                 }
-                Ok(UpdateResult::Update(update)) => {
-                    if let Err(e) = handle_update(update, &mut protocol).await {
-                        break Err(e);
+                // If the update is handled we can update the last_message id, otherwise we exit the loop.
+                Ok(UpdateResult::Update(update)) => match handle_update(update, &mut protocol).await {
+                    Ok(()) => {
+                        last_message_id = Some(cmp::max(last_message_id.unwrap_or(0), update.id));
                     }
-                }
+                    Err(e) => break Err(e),
+                },
             }
         };
 
