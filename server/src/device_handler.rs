@@ -3,11 +3,11 @@ use rpi_messages_common::{
 };
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::Mutex;
 
-use crate::message::MessageContent;
-use crate::messages;
+use crate::message::{MessageContent, Messages};
 
-pub fn run() {
+pub fn run(messages: &Mutex<Messages>) {
     let listener = TcpListener::bind("0.0.0.0:1337").unwrap();
 
     loop {
