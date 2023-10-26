@@ -3,6 +3,11 @@
 //!  
 //!
 
+use anyhow::anyhow;
+use image::{imageops::resize, EncodableLayout, ImageBuffer, RgbImage};
+use rpi_messages_common::{DeviceID, MessageUpdateKind, UpdateID, TEXT_BUFFER_SIZE};
+use rpi_messages_common::{IMAGE_BYTES_PER_PIXEL, IMAGE_HEIGHT, IMAGE_WIDTH};
+use serde::{Deserialize, Serialize};
 use std::{
     fs::{File, OpenOptions},
     io::Read,
@@ -10,11 +15,6 @@ use std::{
     path::Path,
     time::Instant,
 };
-
-use image::{imageops::resize, EncodableLayout, ImageBuffer, RgbImage};
-use rpi_messages_common::{DeviceID, MessageUpdateKind, UpdateID, TEXT_BUFFER_SIZE};
-use rpi_messages_common::{IMAGE_BYTES_PER_PIXEL, IMAGE_HEIGHT, IMAGE_WIDTH};
-use serde::{Deserialize, Serialize};
 
 use crate::Result;
 
@@ -31,7 +31,13 @@ pub enum MessageContent {
 }
 
 impl MessageContent {
-    fn new_text(text: String) -> Result<Vec<Self>> {
+    pub fn new_text(text: String) -> Result<Self> {
+        if text.bytes().len() > TEXT_BUFFER_SIZE {
+            return Err(anyhow!("Text message too long."));
+        }
+        Ok(MessageContent::Text(text))
+    }
+    pub fn new_texts(text: String) -> Result<Vec<Self>> {
         // TODO iterate in a way that we don't split up unicode chars.
         let mut texts = vec![];
         let mut bytes = text.as_bytes();
@@ -46,7 +52,7 @@ impl MessageContent {
         Ok(texts)
     }
 
-    fn new_image(img: RgbImage) -> Result<Self> {
+    pub fn new_image(img: RgbImage) -> Result<Self> {
         let img = resize(
             &img,
             IMAGE_WIDTH as u32,
@@ -89,7 +95,7 @@ pub struct Message {
 pub struct Messages(Vec<Message>);
 
 impl Message {
-    fn new(
+    pub fn new(
         id: UpdateID,
         receiver_id: DeviceID,
         sender_id: SenderID,
@@ -129,7 +135,7 @@ impl Messages {
         Ok(())
     }
 
-    fn add_message(&mut self, message: Message) {
+    pub fn add_message(&mut self, message: Message) {
         self.0.push(message)
     }
 
@@ -145,5 +151,9 @@ impl Messages {
 
     pub fn get_message(&self, id: UpdateID) -> Option<&Message> {
         self.0.iter().find(|message| message.id == id)
+    }
+
+    pub fn next_id(&self) -> UpdateID {
+        self.0.len() as UpdateID
     }
 }

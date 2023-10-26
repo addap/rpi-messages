@@ -6,8 +6,9 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::Mutex;
 
 use crate::message::{MessageContent, Messages};
+use crate::MESSAGES;
 
-pub fn run(messages: &Mutex<Messages>) {
+pub fn run() {
     let listener = TcpListener::bind("0.0.0.0:1337").unwrap();
 
     loop {
@@ -16,10 +17,14 @@ pub fn run(messages: &Mutex<Messages>) {
             Ok((mut socket, addr)) => {
                 println!("new client at {:?}", addr);
 
-                while let Some(command) = parse_client_command(&mut socket) {
-                    match command {
-                        ClientCommand::CheckUpdate(device_id, after) => {
-                            let guard = messages.lock().unwrap();
+                'client: loop {
+                    match parse_client_command(&mut socket) {
+                        None => {
+                            eprintln!("Malformed client command.");
+                            break 'client;
+                        }
+                        Some(ClientCommand::CheckUpdate(device_id, after)) => {
+                            let guard = MESSAGES.lock().unwrap();
                             let result = match guard.get_next_message(device_id, after) {
                                 Some(message) => {
                                     let message_update = MessageUpdate {
@@ -36,8 +41,8 @@ pub fn run(messages: &Mutex<Messages>) {
                             let bytes = result.serialize().unwrap();
                             socket.write_all(&bytes).unwrap();
                         }
-                        ClientCommand::RequestUpdate(id) => {
-                            let guard = messages.lock().unwrap();
+                        Some(ClientCommand::RequestUpdate(id)) => {
+                            let guard = MESSAGES.lock().unwrap();
                             let message =
                                 guard.get_message(id).expect("Requested message not found.");
                             match &message.content {
