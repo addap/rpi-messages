@@ -16,7 +16,7 @@ use std::{
     time::Instant,
 };
 
-use crate::Result;
+use crate::{Result, MESSAGE_PATH};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum SenderID {
@@ -119,24 +119,25 @@ impl Messages {
         Self(Vec::new())
     }
 
-    fn load_file(p: &Path) -> Result<Self> {
+    fn load_file<P: AsRef<Path>>(p: &P) -> Result<Self> {
         let file = File::open(p)?;
         let messages = serde_json::from_reader(&file)?;
         Ok(messages)
     }
 
-    pub fn load(p: &Path) -> Self {
+    pub fn load<P: AsRef<Path>>(p: &P) -> Self {
         Self::load_file(p).unwrap_or(Self::new())
     }
 
-    pub fn store(&self, p: &Path) -> Result<()> {
+    pub fn store<P: AsRef<Path>>(&self, p: &P) -> Result<()> {
         let file = OpenOptions::new().write(true).create(true).open(p)?;
         serde_json::to_writer(&file, self)?;
         Ok(())
     }
 
     pub fn add_message(&mut self, message: Message) {
-        self.0.push(message)
+        self.0.push(message);
+        self.store(&MESSAGE_PATH).ok();
     }
 
     pub fn get_next_message(
@@ -144,9 +145,17 @@ impl Messages {
         receiver_id: DeviceID,
         after: Option<UpdateID>,
     ) -> Option<&Message> {
+        // first get the timestamp of the given id.
+        let after = after
+            .and_then(|id| self.get_message(id))
+            .map(|msg| msg.created_at);
+
         self.0
             .iter()
-            .find(|message| message.receiver_id == receiver_id && Some(message.id) > after)
+            .filter(|message| {
+                message.receiver_id == receiver_id && Some(message.created_at) > after
+            })
+            .min_by_key(|message| message.created_at)
     }
 
     pub fn get_message(&self, id: UpdateID) -> Option<&Message> {

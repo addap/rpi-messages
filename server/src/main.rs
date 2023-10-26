@@ -1,10 +1,4 @@
 use message::Messages;
-use rpi_messages_common::{
-    ClientCommand, MessageUpdate, MessageUpdateKind, UpdateResult, IMAGE_BUFFER_SIZE,
-};
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
-use std::path::Path;
 use std::sync::Mutex;
 use std::thread;
 
@@ -20,9 +14,7 @@ static MESSAGES: Mutex<Messages> = Mutex::new(Messages::new());
 
 fn main() {
     // restore messages from disk
-    let mut guard = MESSAGES.lock().unwrap();
-    *guard = message::Messages::load(Path::new(MESSAGE_PATH));
-    drop(guard);
+    init_messages();
 
     thread::scope(|scope| {
         // spawn thread to handle TCP connections from devices
@@ -30,4 +22,9 @@ fn main() {
         // spawn thread to handle HTTP connections from website/wechat
         scope.spawn(|| web::run());
     })
+}
+
+fn init_messages() {
+    let mut guard = MESSAGES.lock().unwrap();
+    *guard = message::Messages::load(&MESSAGE_PATH);
 }
