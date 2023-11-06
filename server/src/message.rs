@@ -8,6 +8,7 @@ use image::{imageops::resize, EncodableLayout, ImageBuffer, RgbImage};
 use rpi_messages_common::{DeviceID, MessageUpdateKind, UpdateID, TEXT_BUFFER_SIZE};
 use rpi_messages_common::{IMAGE_BYTES_PER_PIXEL, IMAGE_HEIGHT, IMAGE_WIDTH};
 use serde::{Deserialize, Serialize};
+use std::result;
 use std::{
     fs::{File, OpenOptions},
     io::Read,
@@ -16,7 +17,7 @@ use std::{
     time::Instant,
 };
 
-use crate::{Result, MESSAGE_PATH};
+use crate::{AppError, Result, MESSAGE_PATH};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum SenderID {
@@ -31,7 +32,7 @@ pub enum MessageContent {
 }
 
 impl MessageContent {
-    pub fn new_text(text: String) -> Result<Self> {
+    pub fn new_text(text: String) -> result::Result<Self, anyhow::Error> {
         if text.bytes().len() > TEXT_BUFFER_SIZE {
             return Err(anyhow!("Text message too long."));
         }

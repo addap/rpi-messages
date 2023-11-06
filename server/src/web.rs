@@ -1,43 +1,65 @@
-use rouille::{router, Request, Response};
+use anyhow::anyhow;
+use axum::extract::{Path, State};
+use axum::routing::{get, post};
+use axum::{Form, Json, Router, Server};
 use rpi_messages_common::UpdateID;
-use std::sync::Mutex;
+use serde::Deserialize;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use crate::message::{Message, MessageContent, Messages, SenderID};
-use crate::{Result, MESSAGES};
+use crate::uf2::submit_wifi_config;
+use crate::{AppError, WebResult};
 
-pub fn run() {
-    rouille::start_server("0.0.0.0:3000", move |request| {
-        let result: Result<Response> = (|| {
-            router!(request,
-                (GET) ["/new/{msg}", msg: String] => {
-                    let mut guard = MESSAGES.lock().unwrap();
-                    let new_message_content: MessageContent = MessageContent::new_text(msg)?;
-                    let new_message = Message::new(guard.next_id(), 0xcafebabe, SenderID::Web, chrono::Utc::now().naive_utc(), chrono::Duration::hours(24), new_message_content);
+#[derive(Debug, Clone, Deserialize)]
+struct NewMessage {
+    msg: String,
+}
 
-                    guard.add_message(new_message);
-                    Ok(Response::text("added mssage"))
-                },
-                (GET) ["/latest/{after}", after: UpdateID] => {
-                    let guard = MESSAGES.lock().unwrap();
-                    match guard.get_next_message(0xcafebabe, Some(after)) {
-                        Some(Message{content: MessageContent::Text(text), ..}) => {
-                            Ok(Response::text(text))
-                        }
-                        _ => Ok(Response::empty_404())
-                    }
-                },
-                _ => {
-                    Ok(Response::empty_404())
-                }
-            )
-        })();
+#[axum::debug_handler]
+async fn new_message(
+    State(messages): State<Arc<Mutex<Messages>>>,
+    Form(new_message): Form<NewMessage>,
+) -> WebResult<Json<()>> {
+    let mut guard = messages.lock().await;
+    let new_message_content = MessageContent::new_text(new_message.msg)?;
+    let new_message = Message::new(
+        guard.next_id(),
+        0xcafebabe,
+        SenderID::Web,
+        chrono::Utc::now().naive_utc(),
+        chrono::Duration::hours(24),
+        new_message_content,
+    );
 
-        match result {
-            Ok(response) => response,
-            Err(e) => {
-                eprintln!("{}", e);
-                Response::empty_400()
-            }
-        }
-    });
+    guard.add_message(new_message);
+    Ok(Json(()))
+}
+
+async fn latest_message(
+    State(messages): State<Arc<Mutex<Messages>>>,
+    Path(after): Path<UpdateID>,
+) -> WebResult<Json<String>> {
+    let guard = messages.lock().await;
+
+    match guard.get_next_message(0xcafebabe, Some(after)) {
+        Some(Message {
+            content: MessageContent::Text(text),
+            ..
+        }) => Ok(Json(text.to_owned())),
+        _ => Err(AppError::NotFound),
+    }
+}
+
+pub async fn run(messages: Arc<Mutex<Messages>>) {
+    let app = Router::new()
+        .route("/new_message", post(new_message))
+        .route("/latest/:after", get(latest_message))
+        .with_state(messages)
+        .route("/submit_wifi_config", post(submit_wifi_config));
+
+    Server::bind(&"0.0.0.0:3000".parse().unwrap())
+        .serve(app.into_make_service())
+        .await
+        .unwrap();
 }

@@ -2,29 +2,31 @@ use rpi_messages_common::{
     ClientCommand, MessageUpdate, MessageUpdateKind, UpdateResult, IMAGE_BUFFER_SIZE,
 };
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
-use std::sync::Mutex;
+use std::sync::Arc;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Mutex;
+// use std::net::{TcpListener, TcpStream};
 
 use crate::message::{MessageContent, Messages};
-use crate::MESSAGES;
 
-pub fn run() {
-    let listener = TcpListener::bind("0.0.0.0:1337").unwrap();
+pub async fn run(messages: Arc<Mutex<Messages>>) {
+    let listener = TcpListener::bind("0.0.0.0:1337").await.unwrap();
 
     loop {
-        println!("Listening for new connections.");
-        match listener.accept() {
+        println!("Listening forions.");
+        match listener.accept().await {
             Ok((mut socket, addr)) => {
                 println!("new client at {:?}", addr);
 
                 'client: loop {
-                    match parse_client_command(&mut socket) {
+                    match parse_client_command(&mut socket).await {
                         None => {
                             eprintln!("Malformed client command.");
                             break 'client;
                         }
                         Some(ClientCommand::CheckUpdate(device_id, after)) => {
-                            let guard = MESSAGES.lock().unwrap();
+                            let guard = messages.lock().await;
                             let result = match guard.get_next_message(device_id, after) {
                                 Some(message) => {
                                     let message_update = MessageUpdate {
@@ -39,18 +41,19 @@ pub fn run() {
                             };
 
                             let bytes = result.serialize().unwrap();
-                            socket.write_all(&bytes).unwrap();
+                            socket.write_all(&bytes).await;
+                            // Arc::new(socket.write_all(&bytes)).unwrap();
                         }
                         Some(ClientCommand::RequestUpdate(id)) => {
-                            let guard = MESSAGES.lock().unwrap();
+                            let guard = messages.lock().await;
                             let message =
                                 guard.get_message(id).expect("Requested message not found.");
                             match &message.content {
                                 MessageContent::Text(text) => {
-                                    socket.write_all(text.as_bytes()).unwrap();
+                                    socket.write_all(text.as_bytes()).await.unwrap();
                                 }
                                 MessageContent::Image(image) => {
-                                    socket.write_all(image.as_slice()).unwrap()
+                                    socket.write_all(image.as_slice()).await.unwrap();
                                 }
                             }
                         }
@@ -62,8 +65,8 @@ pub fn run() {
     }
 }
 
-fn parse_client_command(socket: &mut TcpStream) -> Option<ClientCommand> {
+async fn parse_client_command(socket: &mut TcpStream) -> Option<ClientCommand> {
     let mut command_buf = [0u8; ClientCommand::SERIALIZED_LEN];
-    socket.read_exact(&mut command_buf).ok()?;
+    socket.read_exact(&mut command_buf).await.ok()?;
     ClientCommand::deserialize(&command_buf).ok()
 }
