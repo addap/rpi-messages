@@ -1,7 +1,8 @@
-use rpi_messages_common::{
-    ClientCommand, MessageUpdate, MessageUpdateKind, UpdateResult, IMAGE_BUFFER_SIZE,
+use common::postcard::experimental::max_size::MaxSize;
+use common::{
+    consts::IMAGE_BUFFER_SIZE,
+    protocol::{CheckUpdateResult, ClientCommand, Update, UpdateKind},
 };
-use std::io::{Read, Write};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -29,25 +30,24 @@ pub async fn run(messages: Arc<Mutex<Messages>>) {
                             let guard = messages.lock().await;
                             let result = match guard.get_next_message(device_id, after) {
                                 Some(message) => {
-                                    let message_update = MessageUpdate {
+                                    let message_update = Update {
                                         lifetime_sec: message.lifetime_secs,
                                         id: message.id,
                                         // FIXME strange that auto-referencing does not work here.
                                         kind: (&message.content).into(),
                                     };
-                                    UpdateResult::Update(message_update)
+                                    CheckUpdateResult::Update(message_update)
                                 }
-                                None => UpdateResult::NoUpdate,
+                                None => CheckUpdateResult::NoUpdate,
                             };
 
-                            let bytes = result.serialize().unwrap();
-                            socket.write_all(&bytes).await;
+                            let bytes = common::postcard::to_allocvec(&result).unwrap();
+                            socket.write_all(&bytes).await.unwrap();
                             // Arc::new(socket.write_all(&bytes)).unwrap();
                         }
                         Some(ClientCommand::RequestUpdate(id)) => {
                             let guard = messages.lock().await;
-                            let message =
-                                guard.get_message(id).expect("Requested message not found.");
+                            let message = guard.get_message(id).expect("Requested message not found.");
                             match &message.content {
                                 MessageContent::Text(text) => {
                                     socket.write_all(text.as_bytes()).await.unwrap();
@@ -66,7 +66,7 @@ pub async fn run(messages: Arc<Mutex<Messages>>) {
 }
 
 async fn parse_client_command(socket: &mut TcpStream) -> Option<ClientCommand> {
-    let mut command_buf = [0u8; ClientCommand::SERIALIZED_LEN];
+    let mut command_buf = [0u8; ClientCommand::POSTCARD_MAX_SIZE];
     socket.read_exact(&mut command_buf).await.ok()?;
-    ClientCommand::deserialize(&command_buf).ok()
+    common::postcard::from_bytes(&command_buf).ok()
 }

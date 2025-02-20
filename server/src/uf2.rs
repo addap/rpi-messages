@@ -5,6 +5,7 @@ use axum::{
     routing::{get, head, post},
     Form, Router, TypedHeader,
 };
+use common::consts::{WIFI_PW_LEN, WIFI_SSID_LEN};
 use serde::Deserialize;
 
 use crate::{AppError, Result, WebResult};
@@ -45,8 +46,9 @@ fn gen_block(address: u32, block_id: u32, data: &[u8]) -> Vec<u8> {
 
 pub async fn submit_wifi_config(Form(data): Form<WifiData>) -> WebResult<impl IntoResponse> {
     println!("ssid: {}\npw: {}", data.wifissid, data.wifipw);
-    if data.wifissid.as_bytes().len() > 32 || data.wifipw.as_bytes().len() > 32 {
-        return Err(AppError::Generic(anyhow!("Too long")));
+    // Compare >= X_LEN because we are saving null-terminated strings, so the data must be stricly smaller.
+    if data.wifissid.as_bytes().len() >= WIFI_SSID_LEN || data.wifipw.as_bytes().len() >= WIFI_PW_LEN {
+        return Err(anyhow!("Wifi password or SSID are too long.").into());
     }
 
     const WIFI_BASE_ADDRESS: u32 = 0x10fff000;
@@ -72,10 +74,7 @@ pub async fn submit_wifi_config(Form(data): Form<WifiData>) -> WebResult<impl In
         header::CONTENT_DISPOSITION,
         "attachment; filename=\"wifi.uf2\"".parse().unwrap(),
     );
-    headers.insert(
-        header::CONTENT_TYPE,
-        "application/octet-stream".parse().unwrap(),
-    );
+    headers.insert(header::CONTENT_TYPE, "application/octet-stream".parse().unwrap());
 
     Ok((headers, file))
 }

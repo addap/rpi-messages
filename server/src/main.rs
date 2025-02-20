@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use axum::{http::StatusCode, response::IntoResponse};
 use core::fmt;
 use message::Messages;
@@ -12,11 +13,10 @@ mod web;
 
 const MESSAGE_PATH: &str = "./messages.json";
 
-#[tokio::main(flavor = "current_thread")]
+#[tokio::main(flavor = "multi_thread")]
 async fn main() {
     // Restore messages from disk.
     let messages = init_messages().await;
-    let messages = Arc::new(messages);
 
     // Create local taskset to spawn tasks on our own thread.
     let local = task::LocalSet::new();
@@ -27,35 +27,40 @@ async fn main() {
     local.await;
 }
 
-async fn init_messages() -> Mutex<Messages> {
-    let loaded = message::Messages::load(&MESSAGE_PATH);
-    let messages = Mutex::new(loaded);
-    messages
+// Messages need to be in an Arc to use axum::debug_handler.
+async fn init_messages() -> Arc<Mutex<Messages>> {
+    let messages = message::Messages::load(&MESSAGE_PATH);
+    Arc::new(Mutex::new(messages))
 }
 
-pub enum AppError {
-    NotFound,
-    Generic(anyhow::Error),
+#[derive(Debug)]
+struct AppError {
+    code: StatusCode,
+    error: anyhow::Error,
+}
+
+impl AppError {
+    pub const fn new(code: StatusCode, error: anyhow::Error) -> Self {
+        Self { code, error }
+    }
+
+    pub fn not_found(item: &str) -> Self {
+        Self {
+            code: StatusCode::NOT_FOUND,
+            error: anyhow!("{item} not found"),
+        }
+    }
 }
 
 impl fmt::Display for AppError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            AppError::Generic(e) => f.write_str(&e.to_string()),
-            AppError::NotFound => f.write_str("Not Found"),
-        }
+        write!(f, "{} - {}", self.code, self.error)
     }
 }
 
 impl IntoResponse for AppError {
     fn into_response(self) -> axum::response::Response {
-        let msg = self.to_string();
-        let status_code = match self {
-            AppError::Generic(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            AppError::NotFound => StatusCode::NOT_FOUND,
-        };
-
-        (status_code, msg).into_response()
+        (self.code, format!("{}", self.error)).into_response()
     }
 }
 
@@ -63,7 +68,10 @@ type Result<T> = std::result::Result<T, anyhow::Error>;
 type WebResult<T> = std::result::Result<T, AppError>;
 
 impl From<anyhow::Error> for AppError {
-    fn from(value: anyhow::Error) -> Self {
-        AppError::Generic(value)
+    fn from(error: anyhow::Error) -> Self {
+        Self {
+            code: StatusCode::INTERNAL_SERVER_ERROR,
+            error,
+        }
     }
 }

@@ -1,19 +1,19 @@
 use core::borrow::Borrow;
 
-use embassy_rp::gpio::Output;
-use embassy_rp::spi::{Blocking, Spi};
+use common::{
+    consts::{IMAGE_BUFFER_SIZE, IMAGE_HEIGHT, IMAGE_WIDTH, TEXT_BUFFER_SIZE},
+    protocol::Update,
+};
 use embassy_time::{Duration, Instant};
-use embedded_graphics::draw_target::DrawTarget;
-use embedded_graphics::pixelcolor::Rgb565;
-use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::Rectangle;
-use embedded_text::alignment::HorizontalAlignment;
-use embedded_text::style::{HeightMode, TextBoxStyleBuilder, VerticalOverdraw};
-use embedded_text::TextBox;
+use embedded_graphics::{draw_target::DrawTarget, pixelcolor::Rgb565, prelude::*, primitives::Rectangle};
+use embedded_text::{
+    alignment::HorizontalAlignment,
+    style::{HeightMode, TextBoxStyleBuilder, VerticalOverdraw},
+    TextBox,
+};
 use heapless::String;
-use rpi_messages_common::{MessageUpdate, IMAGE_BUFFER_SIZE, IMAGE_HEIGHT, IMAGE_WIDTH, TEXT_BUFFER_SIZE};
 
-use crate::{display, MESSAGE_BG_COLOR, MESSAGE_TEXT_STYLE, PRIO_MESSAGE_BG_COLOR};
+use crate::{MESSAGE_BG_COLOR, MESSAGE_TEXT_STYLE, PRIO_MESSAGE_BG_COLOR, ST7735};
 
 /// With margins we are able to fit 14 * 5 characters on one screen.
 /// a.d. TODO we could also do paging for longer messages, since we already need to infer linebreaks anyways.
@@ -23,11 +23,13 @@ const IMAGE_MESSAGE_NUM: usize = 2;
 pub trait MessageData: Borrow<[u8]> {}
 
 #[derive(Debug)]
+#[repr(transparent)]
 pub struct TextData {
     pub text: String<TEXT_BUFFER_SIZE>,
 }
 
 #[derive(Debug)]
+#[repr(transparent)]
 pub struct ImageData {
     pub image: [u8; IMAGE_BUFFER_SIZE],
 }
@@ -113,7 +115,7 @@ impl<T> Message<T>
 where
     T: MessageData,
 {
-    pub fn set_meta(&mut self, update: &MessageUpdate) {
+    pub fn set_meta(&mut self, update: &Update) {
         self.meta.updated_at = Instant::now();
         self.meta.lifetime = Duration::from_secs(update.lifetime_sec.into());
     }
@@ -177,7 +179,7 @@ impl Messages {
     }
 
     /// Get a pointer to either a `Message<TextData>` or `Message<ImageData>` to display.
-    ///
+    /// a.d. TODO fix
     /// - `last_message`: the last message that was displayed. If `None`, it this function returns the oldest active message.
     ///   If `Some(m)` it returns the oldest active message newer than `m`.
     pub fn next_display_message_generic(&self, last_message_time: Instant) -> Option<GenericDisplayMessage<'_>> {
@@ -268,17 +270,7 @@ impl DisplayOptions {
     }
 }
 
-pub fn format_display_string(
-    text: &str,
-    options: DisplayOptions,
-    display: &mut display::ST7735<
-        Spi<'_, embassy_rp::peripherals::SPI1, Blocking>,
-        Output<'_, embassy_rp::peripherals::PIN_8>,
-        Output<'_, embassy_rp::peripherals::PIN_12>,
-        Output<'_, embassy_rp::peripherals::PIN_9>,
-        Output<'_, embassy_rp::peripherals::PIN_13>,
-    >,
-) {
+pub fn format_display_string(text: &str, options: DisplayOptions, display: &mut ST7735) {
     const HORIZONTAL_MARGIN: i32 = 4;
     const VERTICAL_MARGIN: i32 = 6;
 
@@ -302,6 +294,6 @@ pub fn format_display_string(
 
     // Draw the text box.
     // a.d. unwrap() cannot panic since our display implementation has `Infallibe` as the error type.
-    display.clear(options.clear_style()).unwrap();
-    text_box.draw(display).unwrap();
+    display.dev.clear(options.clear_style()).unwrap();
+    text_box.draw(&mut display.dev).unwrap();
 }

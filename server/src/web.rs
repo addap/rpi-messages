@@ -1,8 +1,7 @@
-use anyhow::anyhow;
 use axum::extract::{Path, State};
 use axum::routing::{get, post};
 use axum::{Form, Json, Router, Server};
-use rpi_messages_common::UpdateID;
+use common::protocol::UpdateID;
 use serde::Deserialize;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -47,7 +46,7 @@ async fn latest_message(
             content: MessageContent::Text(text),
             ..
         }) => Ok(Json(text.to_owned())),
-        _ => Err(AppError::NotFound),
+        _ => Err(AppError::not_found("")),
     }
 }
 
