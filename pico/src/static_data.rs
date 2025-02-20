@@ -14,32 +14,35 @@
 //! One hurdle is that the Rust compiler wants to inline some static variables when they are short and used seldomly.
 //! We avoid this by declaring all variables public and mutable, which prevents inlining.
 //! Then there is the bug in the UF2 bootloader of the Pico [0], which means we have to ensure that partial sectors in the
-//! middle of the binary are filled up so that our initial values are written.
+//! middle of the binary are filled up so that our initial values are written. a.d. TODO how solved?
 //!
 //! [0] https://datasheets.raspberrypi.com/rp2040/rp2040-datasheet.pdf#errata-e14
 //!
 //! SAFETY - we never mutate the static variables; we only use `mut` to stop the compiler from inlining them.
+//! TODO - statics are supposed to never be inlined. Check it again and remove mut if possible.
 
 use core::ffi::CStr;
 
+use common::consts::{WIFI_PW_LEN, WIFI_SSID_LEN};
 use embassy_net::{IpAddress, IpEndpoint};
 
 #[used]
 #[link_section = ".device_info"]
-pub static mut DEVICE_ID: u32 = 0xbabebabe;
+pub static mut DEVICE_ID: u32 = 0xcafebabe;
 
 #[used]
 #[link_section = ".wifi_info"]
-pub static mut WIFI_SSID_BYTES: [u8; 32] = *b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+pub static mut WIFI_SSID_BYTES: [u8; WIFI_SSID_LEN] = *b"Buffalo-G-1338\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
 #[used]
 #[link_section = ".wifi_info"]
-pub static mut WIFI_PW_BYTES: [u8; 32] = *b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+pub static mut WIFI_PW_BYTES: [u8; WIFI_PW_LEN] =
+    *b"mysecretpw2\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
 #[used]
 #[link_section = ".wifi_info"]
-pub static mut SERVER_IP_BYTES: [u8; 4] = [202, 61, 254, 108];
+pub static mut SERVER_IPV4_BYTES: [u8; 4] = [192, 168, 188, 69];
 #[used]
 #[link_section = ".wifi_info"]
-pub static mut SERVER_PORT: u16 = 1337;
+pub static mut SERVER_PORT: u16 = 1338;
 
 #[inline(never)]
 pub fn device_id() -> u32 {
@@ -67,24 +70,24 @@ pub fn wifi_password() -> Option<&'static str> {
     let cstr = match CStr::from_bytes_until_nul(unsafe { &WIFI_PW_BYTES }) {
         Ok(cstr) => cstr,
         Err(e) => {
-            log::error!("Parsing Wifi password failed: {}", e);
+            log::error!("Parsing Wifi password failed. No null byte present: {}", e);
             return None;
         }
     };
     match cstr.to_str() {
         Ok(wifi_pw) => Some(wifi_pw),
         Err(e) => {
-            log::error!("Parsing Wifi password failed: {}", e);
+            log::error!("Parsing Wifi password failed. Invalid utf-8: {}", e);
             None
         }
     }
 }
 
 pub fn server_endpoint() -> IpEndpoint {
-    let a0: u8 = unsafe { SERVER_IP_BYTES[0] };
-    let a1: u8 = unsafe { SERVER_IP_BYTES[1] };
-    let a2: u8 = unsafe { SERVER_IP_BYTES[2] };
-    let a3: u8 = unsafe { SERVER_IP_BYTES[3] };
+    let a0: u8 = unsafe { SERVER_IPV4_BYTES[0] };
+    let a1: u8 = unsafe { SERVER_IPV4_BYTES[1] };
+    let a2: u8 = unsafe { SERVER_IPV4_BYTES[2] };
+    let a3: u8 = unsafe { SERVER_IPV4_BYTES[3] };
     let port = unsafe { SERVER_PORT };
 
     IpEndpoint::new(IpAddress::v4(a0, a1, a2, a3), port)

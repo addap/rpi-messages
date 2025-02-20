@@ -1,17 +1,18 @@
-use rpi_messages_common::{
-    ClientCommand, MessageUpdate, MessageUpdateKind, UpdateResult, IMAGE_BUFFER_SIZE,
+use common::{
+    consts::IMAGE_BUFFER_SIZE,
+    postcard::experimental::max_size::MaxSize,
+    protocol::{CheckUpdateResult, ClientCommand, Update, UpdateKind},
 };
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 
-static IMO: &'static [u8; IMAGE_BUFFER_SIZE] = include_bytes!("../../../../pictures/loveimo.bin");
-static BG: &'static [u8; IMAGE_BUFFER_SIZE] =
-    include_bytes!("../../../../pictures/baldurs_gate.bin");
-static TEXT1: &'static str = "Hope you have a good day today.";
-static TEXT2: &'static str = "Take care of yourself. Drink enough water.";
+static IMO: &'static [u8; IMAGE_BUFFER_SIZE] = include_bytes!("../../pictures/love.bin");
+static BG: &'static [u8; IMAGE_BUFFER_SIZE] = include_bytes!("../../pictures/journey.bin");
+static TEXT1: &'static str = "Happy Valentine's Day!";
+static TEXT2: &'static str = "Did you drink enough water today?";
 
 fn main() {
-    let listener = TcpListener::bind("0.0.0.0:1337").unwrap();
+    let listener = TcpListener::bind("0.0.0.0:1338").unwrap();
 
     loop {
         println!("Listening for new connections.");
@@ -25,44 +26,48 @@ fn main() {
                         ClientCommand::CheckUpdate(device_id, _) => {
                             let result = match stage {
                                 0 => {
-                                    println!("Got check for update. Sending text.");
-                                    if device_id == 0 {
-                                        UpdateResult::Update(MessageUpdate {
-                                            lifetime_sec: 60 * 100,
-                                            kind: MessageUpdateKind::Text(TEXT1.len() as u32),
-                                            id: 0,
-                                        })
-                                    } else {
-                                        UpdateResult::Update(MessageUpdate {
-                                            lifetime_sec: 60 * 100,
-                                            kind: MessageUpdateKind::Text(TEXT2.len() as u32),
-                                            id: 2,
-                                        })
-                                    }
+                                    println!("Got check for update. Sending text 1.");
+                                    // if device_id == 0 {
+                                    CheckUpdateResult::Update(Update {
+                                        lifetime_sec: 60 * 100,
+                                        kind: UpdateKind::Text(TEXT1.len() as u32),
+                                        id: 0,
+                                    })
+                                    // } else {
                                 }
                                 1 => {
-                                    println!("Got check for update. Sending image.");
-                                    if device_id == 0 {
-                                        UpdateResult::Update(MessageUpdate {
-                                            lifetime_sec: 60 * 100,
-                                            kind: MessageUpdateKind::Image,
-                                            id: 1,
-                                        })
-                                    } else {
-                                        UpdateResult::Update(MessageUpdate {
-                                            lifetime_sec: 60 * 100,
-                                            kind: MessageUpdateKind::Image,
-                                            id: 3,
-                                        })
-                                    }
+                                    println!("Got check for update. Sending image 1.");
+                                    // if device_id == 0 {
+                                    CheckUpdateResult::Update(Update {
+                                        lifetime_sec: 60 * 100,
+                                        kind: UpdateKind::Image,
+                                        id: 1,
+                                    })
+                                }
+                                2 => {
+                                    println!("Got check for update. Sending text 2.");
+                                    CheckUpdateResult::Update(Update {
+                                        lifetime_sec: 60 * 100,
+                                        kind: UpdateKind::Text(TEXT2.len() as u32),
+                                        id: 2,
+                                    })
+                                }
+                                // } else {
+                                3 => {
+                                    println!("Got check for update. Sending image 1.");
+                                    CheckUpdateResult::Update(Update {
+                                        lifetime_sec: 60 * 100,
+                                        kind: UpdateKind::Image,
+                                        id: 3,
+                                    })
                                 }
                                 _ => {
                                     println!("Got check for update. Sending nothing.");
-                                    UpdateResult::NoUpdate
+                                    CheckUpdateResult::NoUpdate
                                 }
                             };
 
-                            let bytes = result.serialize().unwrap();
+                            let bytes = common::postcard::to_allocvec(&result).unwrap();
                             socket.write_all(&bytes).unwrap();
 
                             stage += 1;
@@ -97,7 +102,7 @@ fn main() {
 }
 
 fn parse_client_command(socket: &mut TcpStream) -> Option<ClientCommand> {
-    let mut command_buf = [0u8; ClientCommand::SERIALIZED_LEN];
+    let mut command_buf = [0u8; ClientCommand::POSTCARD_MAX_SIZE];
     socket.read_exact(&mut command_buf).ok()?;
-    ClientCommand::deserialize(&command_buf).ok()
+    common::postcard::from_bytes(&command_buf).ok()
 }
