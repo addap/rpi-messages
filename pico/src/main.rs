@@ -10,7 +10,7 @@
 use core::{cmp, future::pending};
 
 use common::{
-    consts::{IMAGE_HEIGHT, IMAGE_WIDTH, TEXT_BUFFER_SIZE},
+    consts::{IMAGE_HEIGHT, IMAGE_WIDTH},
     protocol::{CheckUpdateResult, Update, UpdateKind},
 };
 use cyw43::JoinOptions;
@@ -37,7 +37,6 @@ use embedded_graphics::{
 };
 use embedded_hal_bus::spi::ExclusiveDevice;
 use error::ServerMessageError;
-use heapless::String;
 use messagebuf::TextData;
 /// In deploy mode we just want to reboot the device.
 #[cfg(feature = "deploy")]
@@ -49,12 +48,11 @@ use static_cell::StaticCell;
 
 use crate::error::{handle_error, Error, Result};
 use crate::messagebuf::{format_display_string, DisplayMessage, DisplayOptions, Messages};
-use crate::protocol::Protocol;
 use crate::static_data::device_id;
 
 mod error;
+mod fetch_protocol;
 mod messagebuf;
-mod protocol;
 mod static_data;
 
 const INIT_LOGGING_WAIT: Duration = Duration::from_secs(2);
@@ -121,10 +119,10 @@ mod system_tasks {
 }
 
 //// ---- Main tasks to implement the device features. ------------------------
-mod main_taks {
+mod main_tasks {
     use super::*;
 
-    async fn handle_update<'a>(update: Update, protocol: &mut Protocol<'a>) -> Result<()> {
+    async fn handle_update<'a>(update: Update, protocol: &mut fetch_protocol::Socket<'_>) -> Result<()> {
         log::info!("Received an update. Acquiring mutex to change message buffer.");
         let mut guard = MESSAGES.lock().await;
         let messages: &mut Messages = &mut guard;
@@ -173,15 +171,17 @@ mod main_taks {
     /// - [`stack`]: The network stack. Used to create sockets.
     /// - [`control`]: The driver of the WIFI chip. TODO usage not clear.
     #[embassy_executor::task]
-    pub(super) async fn fetch_data(stack: net::Stack<'static>, mut control: cyw43::Control<'static>) {
-        let mut tx_buffer = [0; 256];
-
+    pub(super) async fn fetch_data(
+        mut state: fetch_protocol::State,
+        stack: net::Stack<'static>,
+        mut control: cyw43::Control<'static>,
+    ) {
         // We save the id of the latest message we received to send to the server for the next update check.
         let mut last_message_id = None;
 
         loop {
             log::info!("Creating new connection.");
-            let protocol = Protocol::new(stack, &mut control, &mut tx_buffer).await;
+            let protocol = fetch_protocol::Socket::new(&mut state, stack, &mut control).await;
             let mut protocol = match protocol {
                 Ok(protocol) => protocol,
                 Err(e) => {
@@ -211,7 +211,7 @@ mod main_taks {
                 }
             };
 
-            drop(protocol);
+            protocol.abort().await;
 
             if let Err(e) = update_result {
                 handle_error(e);
@@ -226,16 +226,21 @@ mod main_taks {
     #[embassy_executor::task]
     pub(super) async fn display_messages(mut display: ST7735) {
         let mut last_message_time = Instant::MIN;
-        let mut prio_message: Option<TextData> = None;
+        let mut prio_message_opt: Option<TextData> = None;
 
         // Each time the loop is entered we immediately display a priority message if we are currently holding one.
-        // Otherwise we display the next non-priority message and then wait for `MESSAGE_DISPLAY_DURATION` in order to display it
-        // for an appropriate amount of time. This waiting is interrupted if we are signalled that a new priority message exists.
+        // Priority messages are shown for `PRIO_MESSAGE_DISPLAY_DURATION` or until a new priority message arrives.
+        // If there is no priority message we display the next non-priority message and then wait for `MESSAGE_DISPLAY_DURATION`
+        // or until a new priority message arrives.
         loop {
             log::info!("Check if priority message exists.");
 
-            if let Some(prio_message) = prio_message.take() {
+            if let Some(prio_message) = prio_message_opt.take() {
                 format_display_string(&prio_message.text, DisplayOptions::PriorityMessage, &mut display);
+
+                prio_message_opt = with_timeout(PRIO_MESSAGE_DISPLAY_DURATION, PRIO_MESSAGE_SIGNAL.wait())
+                    .await
+                    .ok();
             } else {
                 log::info!("No priority message found. Acquiring mutex to read message buffer.");
                 let guard = MESSAGES.lock().await;
@@ -258,11 +263,11 @@ mod main_taks {
                 } else {
                     format_display_string("No messages :(", DisplayOptions::NormalMessage, &mut display);
                 }
-            }
 
-            prio_message = with_timeout(MESSAGE_DISPLAY_DURATION, PRIO_MESSAGE_SIGNAL.wait())
-                .await
-                .ok();
+                prio_message_opt = with_timeout(MESSAGE_DISPLAY_DURATION, PRIO_MESSAGE_SIGNAL.wait())
+                    .await
+                    .ok();
+            }
         }
     }
 }
@@ -440,6 +445,7 @@ mod init {
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
+    let protocol_state = fetch_protocol::State::take();
 
     let usb_driver = init::usb(p.USB).await;
     spawner
@@ -451,7 +457,7 @@ async fn main(spawner: Spawner) {
 
     let display = init::display(p.PIN_6, p.PIN_7, p.PIN_8, p.PIN_9, p.SPI1, p.PIN_10, p.PIN_11).await;
     spawner
-        .spawn(main_taks::display_messages(display))
+        .spawn(main_tasks::display_messages(display))
         .expect("Spawning display_messages_task failed.");
     let (cyw43_driver, mut cyw43_control, cyw43_runner) =
         init::cyw43(p.PIN_23, p.PIN_25, p.PIO0, p.PIN_24, p.PIN_29, p.DMA_CH0).await;
@@ -465,7 +471,7 @@ async fn main(spawner: Spawner) {
 
     init::wifi(&mut cyw43_control).await;
     spawner
-        .spawn(main_taks::fetch_data(net_stack, cyw43_control))
+        .spawn(main_tasks::fetch_data(protocol_state, net_stack, cyw43_control))
         .expect("Spawning fetch_data_task failed.");
 
     log::info!("Finished configuration.");

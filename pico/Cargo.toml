@@ -8,6 +8,7 @@ license = "MIT OR Apache-2.0"
 common = { path = "../common", package = "rpi-messages-common" }
 log = { version = "0.4" }
 heapless = { version = "0.8.0", features = [] }
+derive_more = { version = "2.0.1", default-features = false, features = ["from"] }
 #defmt-rtt = "0.4.1"
 
 # Raspberry-pi specific crates.
@@ -17,6 +18,7 @@ cortex-m = "0.7.7"
 ## Boot into USB flashing mode after panic.
 rp2040-panic-usb-boot = "0.6.0"
 
+# Embassy crates
 cyw43 = { version = "0.3.0", features = ["firmware-logs" ] }
 cyw43-pio = { version = "0.3.0", features = [] }
 embassy-rp = { version = "0.3.1", features = ["rp2040", "critical-section-impl", "time-driver"] }
@@ -26,23 +28,24 @@ embassy-net = { version = "0.6.0", features = ["tcp", "udp", "dhcpv4" ] }
 embassy-sync = { version = "0.6.2" }
 embassy-usb-logger = { version = "0.4.0" }
 embassy-time = { version = "0.4.0", features = [] }
-# To make static references
+
+# Concurrency primitive crates
+## make static references
 static_cell = { version = "2.1.0", features = ["nightly"] }
-# Used in `static_cell`. We need to list it explicitly to enable the `critical-section` feature, which enables atomic operations by using a critical section (currently we use the implementation by `embassy-rp`).
+## Used in `static_cell`. We need to list it explicitly to enable the `critical-section` feature, which enables atomic operations by using a critical section (currently we use the implementation by `embassy-rp`).
 portable-atomic = { version = "1.10.0", default-features = false, features = ["require-cas", "critical-section"] }
+critical-section = "1.2.0"
 
 # General embedded crates from the HAL team
 embedded-io-async = { version = "0.6.1", features = [] }
-
-# High-level deaping API definition
-embedded-graphics = { version = "0.8.1", features = [] }
-embedded-text = "0.7.2"
-# Implementation of the embedded-graphics API
-st7735-lcd = "0.10.0"
 embedded-hal-bus = { version = "0.3.0", features = [] }
 embedded-hal = "1.0.0"
-thiserror = { version = "2.0.11", default-features = false }
-derive_more = { version = "2.0.1", default-features = false, features = ["from"] }
+
+# Drawing API crates
+embedded-graphics = { version = "0.8.1", features = [] }
+embedded-text = "0.7.2"
+## Implementation of the embedded-graphics API
+st7735-lcd = "0.10.0"
 
 [features]
 deploy = []

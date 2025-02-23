@@ -16,22 +16,54 @@ use crate::Result;
 
 // a.d. TODO we could treat all of the consts like in the static_data module to make it configurable.
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(10);
+const TX_BUFFER_SIZE: usize = 256;
 
-// rx_buffer must be large enough to hold a whole image, or alternatively we do streaming.
-static mut RX_BUFFER: [u8; IMAGE_BUFFER_SIZE] = [0; IMAGE_BUFFER_SIZE];
+mod internal {
+    pub struct State {
+        _private: (),
+    }
 
-pub struct Protocol<'a> {
-    socket: TcpSocket<'a>,
+    impl State {
+        unsafe fn steal() -> Self {
+            Self { _private: () }
+        }
+
+        fn take_with_cs(_cs: critical_section::CriticalSection) -> Self {
+            static mut _FETCH_PROTOCOL_STATE: bool = false;
+
+            unsafe {
+                if _FETCH_PROTOCOL_STATE {
+                    panic!("fetch_protocol::State::init called more than once!")
+                }
+                _FETCH_PROTOCOL_STATE = true;
+                Self::steal()
+            }
+        }
+
+        pub fn take() -> Self {
+            critical_section::with(Self::take_with_cs)
+        }
+    }
 }
 
-impl<'a> Protocol<'a> {
+pub use internal::State;
+
+pub struct Socket<'a> {
+    state: &'a mut State,
+    socket: TcpSocket<'static>,
+}
+
+impl<'a> Socket<'a> {
     pub async fn new(
+        state: &'a mut State,
         stack: embassy_net::Stack<'static>,
-        control: &'a mut Control<'static>,
-        tx_buffer: &'a mut [u8],
-    ) -> Result<Protocol<'a>> {
-        // SAFETY - we only use RX_BUFFER here. We set it as static to keep it in the .data section. TODO might not be necessary but iirc I had problems when it was on the stack, i.e. in the future.
-        let mut socket = unsafe { TcpSocket::new(stack, &mut RX_BUFFER, tx_buffer) };
+        control: &mut Control<'static>,
+    ) -> Result<Self> {
+        static mut RX_BUFFER: [u8; IMAGE_BUFFER_SIZE] = [0; IMAGE_BUFFER_SIZE];
+        static mut TX_BUFFER: [u8; TX_BUFFER_SIZE] = [0; TX_BUFFER_SIZE];
+
+        // SAFETY - TODO
+        let mut socket = unsafe { TcpSocket::new(stack, &mut RX_BUFFER, &mut TX_BUFFER) };
         socket.set_timeout(Some(SOCKET_TIMEOUT));
 
         // TODO what does setting the gpio here do?
@@ -44,7 +76,12 @@ impl<'a> Protocol<'a> {
             .map_err(|e| Error::ServerConnect(e));
         control.gpio_set(0, true).await;
 
-        connected.and(Ok(Self { socket }))
+        connected.and(Ok(Self { state, socket }))
+    }
+
+    pub async fn abort(mut self) {
+        self.socket.abort();
+        self.socket.flush().await.ok();
     }
 
     pub async fn check_update(&mut self, after: Option<UpdateID>) -> Result<CheckUpdateResult> {
