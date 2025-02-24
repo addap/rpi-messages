@@ -53,14 +53,14 @@ pub fn wifi_ssid() -> Option<&'static str> {
     let cstr = match CStr::from_bytes_until_nul(unsafe { &WIFI_SSID_BYTES }) {
         Ok(cstr) => cstr,
         Err(e) => {
-            log::error!("Parsing Wifi SSID failed: {}", e);
+            log::error!("Parsing Wifi SSID failed.\n{}", e);
             return None;
         }
     };
     match cstr.to_str() {
         Ok(wifi_ssid) => Some(wifi_ssid),
         Err(e) => {
-            log::error!("Parsing Wifi SSID failed: {}", e);
+            log::error!("Parsing Wifi SSID failed\n{}", e);
             None
         }
     }
@@ -70,14 +70,14 @@ pub fn wifi_password() -> Option<&'static str> {
     let cstr = match CStr::from_bytes_until_nul(unsafe { &WIFI_PW_BYTES }) {
         Ok(cstr) => cstr,
         Err(e) => {
-            log::error!("Parsing Wifi password failed. No null byte present: {}", e);
+            log::error!("Parsing Wifi password failed.\n{}", e);
             return None;
         }
     };
     match cstr.to_str() {
         Ok(wifi_pw) => Some(wifi_pw),
         Err(e) => {
-            log::error!("Parsing Wifi password failed. Invalid utf-8: {}", e);
+            log::error!("Parsing Wifi password failed.\n{}", e);
             None
         }
     }
