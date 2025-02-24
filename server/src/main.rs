@@ -5,11 +5,8 @@ use message::Messages;
 use std::{sync::Arc, thread};
 use tokio::{sync::Mutex, task};
 
-mod device_handler;
-mod image;
+mod handlers;
 mod message;
-mod uf2;
-mod web;
 
 const MESSAGE_PATH: &str = "./messages.json";
 
@@ -21,9 +18,9 @@ async fn main() {
     // Create local taskset to spawn tasks on our own thread.
     let local = task::LocalSet::new();
     // spawn task to handle TCP connections from devices
-    local.spawn_local(device_handler::run(messages.clone()));
+    local.spawn_local(handlers::device::run(messages.clone()));
     // spawn task to handle HTTP connections from website/wechat
-    local.spawn_local(web::run(messages.clone()));
+    local.spawn_local(handlers::web::run(messages.clone()));
     local.await;
 }
 

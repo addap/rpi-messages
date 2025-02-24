@@ -1,5 +1,8 @@
-#![cfg_attr(target_arch = "arm", no_std)]
-pub mod consts;
-pub mod protocol;
+#![cfg_attr(not(feature = "std"), no_std)]
 
+pub mod consts;
+pub mod protocols;
+pub mod types;
+
+#[cfg(feature = "pico")]
 pub use postcard;

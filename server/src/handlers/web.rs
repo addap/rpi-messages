@@ -1,19 +1,15 @@
-use axum::extract::{Path, State};
-use axum::routing::{get, post};
-use axum::{Form, Json, Router, Server};
-use common::protocol::UpdateID;
-use serde::Deserialize;
+use axum::{
+    extract::{Path, State},
+    routing::{get, post},
+    Form, Json, Router, Server,
+};
+use common::{protocols::web::NewMessage, types::UpdateID};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use super::uf2::submit_wifi_config;
 use crate::message::{Message, MessageContent, Messages, SenderID};
-use crate::uf2::submit_wifi_config;
 use crate::{AppError, WebResult};
-
-#[derive(Debug, Clone, Deserialize)]
-struct NewMessage {
-    msg: String,
-}
 
 #[axum::debug_handler]
 async fn new_message(
@@ -21,7 +17,7 @@ async fn new_message(
     Form(new_message): Form<NewMessage>,
 ) -> WebResult<Json<()>> {
     let mut guard = messages.lock().await;
-    let new_message_content = MessageContent::new_text(new_message.msg)?;
+    let new_message_content = MessageContent::from(new_message);
     let new_message = Message::new(
         guard.next_id(),
         0xcafebabe,
@@ -35,6 +31,7 @@ async fn new_message(
     Ok(Json(()))
 }
 
+#[axum::debug_handler]
 async fn latest_message(
     State(messages): State<Arc<Mutex<Messages>>>,
     Path(after): Path<UpdateID>,

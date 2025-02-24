@@ -4,7 +4,10 @@ use postcard;
 use postcard::experimental::max_size::MaxSize;
 use serde::{Deserialize, Serialize};
 
-use crate::consts::{IMAGE_BUFFER_SIZE, TEXT_BUFFER_SIZE};
+use crate::{
+    consts::{IMAGE_BUFFER_SIZE, TEXT_BUFFER_SIZE},
+    types::{DeviceID, UpdateID},
+};
 
 #[derive(Debug)]
 pub enum Error {
@@ -24,9 +27,6 @@ pub enum UpdateKind {
     Image,
     Text(u32),
 }
-
-pub type DeviceID = u32;
-pub type UpdateID = u32;
 
 #[derive(Clone, Copy, Serialize, Deserialize, MaxSize)]
 pub struct Update {

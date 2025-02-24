@@ -1,7 +1,7 @@
 use common::postcard::experimental::max_size::MaxSize;
 use common::{
     consts::IMAGE_BUFFER_SIZE,
-    protocol::{CheckUpdateResult, ClientCommand, Update, UpdateKind},
+    protocols::pico::{CheckUpdateResult, ClientCommand, Update, UpdateKind},
 };
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -12,10 +12,10 @@ use tokio::sync::Mutex;
 use crate::message::{MessageContent, Messages};
 
 pub async fn run(messages: Arc<Mutex<Messages>>) {
-    let listener = TcpListener::bind("0.0.0.0:1337").await.unwrap();
+    let listener = TcpListener::bind("0.0.0.0:1338").await.unwrap();
 
     loop {
-        println!("Listening forions.");
+        println!("Listening for client connections.");
         match listener.accept().await {
             Ok((mut socket, addr)) => {
                 println!("new client at {:?}", addr);
@@ -33,8 +33,7 @@ pub async fn run(messages: Arc<Mutex<Messages>>) {
                                     let message_update = Update {
                                         lifetime_sec: message.lifetime_secs,
                                         id: message.id,
-                                        // FIXME strange that auto-referencing does not work here.
-                                        kind: (&message.content).into(),
+                                        kind: UpdateKind::from(&message.content),
                                     };
                                     CheckUpdateResult::Update(message_update)
                                 }
@@ -43,11 +42,11 @@ pub async fn run(messages: Arc<Mutex<Messages>>) {
 
                             let bytes = common::postcard::to_allocvec(&result).unwrap();
                             socket.write_all(&bytes).await.unwrap();
-                            // Arc::new(socket.write_all(&bytes)).unwrap();
                         }
                         Some(ClientCommand::RequestUpdate(id)) => {
                             let guard = messages.lock().await;
-                            let message = guard.get_message(id).expect("Requested message not found.");
+                            let message =
+                                guard.get_message(id).expect("Requested message not found.");
                             match &message.content {
                                 MessageContent::Text(text) => {
                                     socket.write_all(text.as_bytes()).await.unwrap();

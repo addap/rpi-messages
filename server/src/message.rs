@@ -6,7 +6,8 @@
 use anyhow::anyhow;
 use common::{
     consts::{IMAGE_BYTES_PER_PIXEL, IMAGE_HEIGHT, IMAGE_WIDTH, TEXT_BUFFER_SIZE},
-    protocol::{DeviceID, UpdateID, UpdateKind},
+    protocols::{pico::UpdateKind, web::NewMessage},
+    types::{DeviceID, UpdateID},
 };
 use image::{imageops::resize, EncodableLayout, ImageBuffer, RgbImage};
 use serde::{Deserialize, Serialize};
@@ -74,11 +75,19 @@ impl MessageContent {
     }
 }
 
-impl Into<UpdateKind> for &MessageContent {
-    fn into(self) -> UpdateKind {
-        match self {
+impl From<&MessageContent> for UpdateKind {
+    fn from(value: &MessageContent) -> UpdateKind {
+        match value {
             MessageContent::Text(text) => UpdateKind::Text(text.len() as u32),
             MessageContent::Image(_) => UpdateKind::Image,
+        }
+    }
+}
+
+impl From<NewMessage> for MessageContent {
+    fn from(value: NewMessage) -> Self {
+        match value {
+            NewMessage::Text { text } => MessageContent::Text(text),
         }
     }
 }
@@ -142,13 +151,21 @@ impl Messages {
         self.store(&MESSAGE_PATH).ok();
     }
 
-    pub fn get_next_message(&self, receiver_id: DeviceID, after: Option<UpdateID>) -> Option<&Message> {
+    pub fn get_next_message(
+        &self,
+        receiver_id: DeviceID,
+        after: Option<UpdateID>,
+    ) -> Option<&Message> {
         // first get the timestamp of the given id.
-        let after = after.and_then(|id| self.get_message(id)).map(|msg| msg.created_at);
+        let after = after
+            .and_then(|id| self.get_message(id))
+            .map(|msg| msg.created_at);
 
         self.0
             .iter()
-            .filter(|message| message.receiver_id == receiver_id && Some(message.created_at) > after)
+            .filter(|message| {
+                message.receiver_id == receiver_id && Some(message.created_at) > after
+            })
             .min_by_key(|message| message.created_at)
     }
 

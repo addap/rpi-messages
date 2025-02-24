@@ -4,5 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-serde = { version = "1.0", default-features = false, features = ["derive"] }
-postcard = { version = "1.1", features = ["experimental-derive"] }
+serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
+postcard = { version = "1.1", features = ["experimental-derive"], optional = true }
+
+[features]
+default = []
+std = []
+pico = ["postcard", "serde"]
+web = ["serde/std", "std"]

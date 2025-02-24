@@ -6,9 +6,9 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-common = { path = "../common", package = "rpi-messages-common" }
+common = { path = "../common", package = "rpi-messages-common", features = [ "web", "pico" ] }
 # We want to use the same postcard version as the common dependency. a.d. TODO check if this works out if common spefifiec e.g. 1.0 but 1.1 alsp exists. Does this pick 1.0 or 1.1?
-postcard = { version = "*", features = ["use-std"] }
+postcard = { version = "*", features = [ "use-std" ] }
 anyhow = "1.0.75"
 axum = { version = "0.6.20", features = [ "form", "headers", "macros" ] }
 chrono = { version = "0.4.31", features = [ "serde", "rkyv" ] }

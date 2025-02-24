@@ -1,7 +1,7 @@
 use common::{
     consts::IMAGE_BUFFER_SIZE,
     postcard::experimental::max_size::MaxSize,
-    protocol::{CheckUpdateResult, ClientCommand, Update, UpdateKind},
+    protocols::pico::{CheckUpdateResult, ClientCommand, Update, UpdateKind},
 };
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
