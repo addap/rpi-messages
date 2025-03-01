@@ -5,7 +5,7 @@ version = "1.0.0"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-common = { path = "../common", package = "rpi-messages-common" }
+common = { path = "../common", package = "rpi-messages-common", features = [ "pico" ] }
 log = { version = "0.4" }
 heapless = { version = "0.8.0", features = [] }
 derive_more = { version = "2.0.1", default-features = false, features = ["from"] }
@@ -19,7 +19,7 @@ cortex-m = "0.7.7"
 rp2040-panic-usb-boot = "0.6.0"
 
 # Embassy crates
-cyw43 = { version = "0.3.0", features = ["firmware-logs" ] }
+cyw43 = { version = "0.3.0", features = [ "firmware-logs", "log" ] }
 cyw43-pio = { version = "0.3.0", features = [] }
 embassy-rp = { version = "0.3.1", features = ["rp2040", "critical-section-impl", "time-driver"] }
 embassy-executor = { version = "0.7.0", features = ["nightly", "arch-cortex-m", "executor-thread", "executor-interrupt"] }

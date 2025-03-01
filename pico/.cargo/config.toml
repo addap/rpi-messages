@@ -9,3 +9,4 @@ runner = "elf2uf2-rs -d"
 
 [env]
 #DEFMT_LOG = "debug"
+LOG_LEVEL = "Info"

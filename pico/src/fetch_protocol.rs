@@ -2,8 +2,8 @@
 
 use common::{
     consts::IMAGE_BUFFER_SIZE,
-    postcard::{self, experimental::max_size::MaxSize},
-    protocol::{CheckUpdateResult, ClientCommand, Update, UpdateID},
+    protocols::pico::{serialization::SerDe, CheckUpdateResult, ClientCommand, Update},
+    types::UpdateID,
 };
 use cyw43::Control;
 use embassy_net::tcp::TcpSocket;
@@ -49,6 +49,7 @@ mod internal {
 pub use internal::State;
 
 pub struct Socket<'a> {
+    #[allow(unused)]
     state: &'a mut State,
     socket: TcpSocket<'static>,
 }
@@ -63,7 +64,10 @@ impl<'a> Socket<'a> {
         static mut TX_BUFFER: [u8; TX_BUFFER_SIZE] = [0; TX_BUFFER_SIZE];
 
         // SAFETY - TODO
-        let mut socket = unsafe { TcpSocket::new(stack, &mut RX_BUFFER, &mut TX_BUFFER) };
+        let mut socket = unsafe {
+            #[allow(static_mut_refs)]
+            TcpSocket::new(stack, &mut RX_BUFFER, &mut TX_BUFFER)
+        };
         socket.set_timeout(Some(SOCKET_TIMEOUT));
 
         // TODO what does setting the gpio here do?
@@ -86,23 +90,29 @@ impl<'a> Socket<'a> {
 
     pub async fn check_update(&mut self, after: Option<UpdateID>) -> Result<CheckUpdateResult> {
         let command = ClientCommand::CheckUpdate(device_id(), after);
+
         // TODO make static buffer
-        let mut command_buf = [0u8; ClientCommand::POSTCARD_MAX_SIZE];
-        postcard::to_slice(&command, &mut command_buf)?;
+        let mut command_buf = [0u8; ClientCommand::BUFFER_SIZE];
+        let command_buf = command.to_bytes(&mut command_buf)?;
+
+        log::info!("Check Update command buf {command_buf:?}");
 
         self.socket.write(&command_buf).await.map_err(|_| Error::Socket)?;
 
-        let mut reply_buf = [0u8; CheckUpdateResult::POSTCARD_MAX_SIZE];
+        let mut reply_buf = [0u8; CheckUpdateResult::BUFFER_SIZE];
         self.socket
             .read_exact(&mut reply_buf)
             .await
             .map_err(|_| Error::Socket)?;
 
-        let result: CheckUpdateResult = postcard::from_bytes(&reply_buf)?;
+        log::info!("CheckUpdateResult buf {reply_buf:?}");
+
+        let result = CheckUpdateResult::from_bytes(&reply_buf)?;
         let valid = result
             .check_valid()
             .map_err(|e| Error::ServerMessage(ServerMessageError::Format(e)));
 
+        log::info!("CheckUpdateResult {result:?}");
         valid.and(Ok(result))
     }
 
@@ -111,8 +121,10 @@ impl<'a> Socket<'a> {
 
         let command = ClientCommand::RequestUpdate(update.id);
         // a.d. TODO try to use MaybeUninit
-        let mut command_buf = [0u8; ClientCommand::POSTCARD_MAX_SIZE];
-        postcard::to_slice(&command, &mut command_buf)?;
+        let mut command_buf = [0u8; ClientCommand::BUFFER_SIZE];
+        let command_buf = command.to_bytes(&mut command_buf)?;
+
+        log::info!("Request Update command buf {command_buf:?}");
 
         self.socket.write_all(&command_buf).await.map_err(|_| Error::Socket)?;
 

@@ -1,7 +1,6 @@
 use common::{
     consts::IMAGE_BUFFER_SIZE,
-    postcard::experimental::max_size::MaxSize,
-    protocols::pico::{CheckUpdateResult, ClientCommand, Update, UpdateKind},
+    protocols::pico::{serialization::SerDe, CheckUpdateResult, ClientCommand, Update, UpdateKind},
 };
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -67,8 +66,8 @@ fn main() {
                                 }
                             };
 
-                            let bytes = common::postcard::to_allocvec(&result).unwrap();
-                            socket.write_all(&bytes).unwrap();
+                            let buf = result.to_bytes_alloc().unwrap();
+                            socket.write_all(&buf).unwrap();
 
                             stage += 1;
                         }
@@ -102,7 +101,7 @@ fn main() {
 }
 
 fn parse_client_command(socket: &mut TcpStream) -> Option<ClientCommand> {
-    let mut command_buf = [0u8; ClientCommand::POSTCARD_MAX_SIZE];
+    let mut command_buf = [0u8; ClientCommand::BUFFER_SIZE];
     socket.read_exact(&mut command_buf).ok()?;
-    common::postcard::from_bytes(&command_buf).ok()
+    ClientCommand::from_bytes(&command_buf).ok()
 }

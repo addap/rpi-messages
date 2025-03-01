@@ -3,6 +3,3 @@
 pub mod consts;
 pub mod protocols;
 pub mod types;
-
-#[cfg(feature = "pico")]
-pub use postcard;

@@ -11,7 +11,7 @@ use core::{cmp, future::pending};
 
 use common::{
     consts::{IMAGE_HEIGHT, IMAGE_WIDTH},
-    protocol::{CheckUpdateResult, Update, UpdateKind},
+    protocols::pico::{CheckUpdateResult, Update, UpdateKind},
 };
 use cyw43::JoinOptions;
 use cyw43_pio::{PioSpi, DEFAULT_CLOCK_DIVIDER};
@@ -73,6 +73,9 @@ const SERVER_CONNECT_ERROR_WAIT: Duration = Duration::from_secs(2);
 static MESSAGES: Mutex<CriticalSectionRawMutex, Messages> = Mutex::new(Messages::new());
 static PRIO_MESSAGE_SIGNAL: Signal<CriticalSectionRawMutex, TextData> = Signal::new();
 
+static FW: &[u8; 230321] = include_bytes!("../cyw43-firmware/43439A0.bin");
+static CLM: &[u8; 4752] = include_bytes!("../cyw43-firmware/43439A0_clm.bin");
+
 type DisplaySPI = embassy_rp::peripherals::SPI1;
 // a.d. TODO implement DrawTarget & Deref
 struct ST7735 {
@@ -102,19 +105,23 @@ mod system_tasks {
     pub(super) async fn cyw43(
         runner: cyw43::Runner<'static, Output<'static>, PioSpi<'static, WifiPIO, 0, WifiDMA>>,
     ) -> ! {
+        log::info!("System task cyw43 starting.");
         runner.run().await
     }
 
     /// Manages the network stack (so I guess it handles connections, creating sockets and actually sending stuff over sockets).
     #[embassy_executor::task]
     pub(super) async fn net(mut runner: net::Runner<'static, cyw43::NetDriver<'static>>) -> ! {
+        log::info!("System task net starting.");
         runner.run().await
     }
 
     /// Sets the global logger and sends log messages over USB.
     #[embassy_executor::task]
     pub(super) async fn logger(driver: Driver<'static, USB>) {
-        embassy_usb_logger::run!(1024, log::LevelFilter::Debug, driver);
+        log::info!("System task logger starting.");
+        let level = env!("LOG_LEVEL").parse().unwrap_or(log::LevelFilter::Info);
+        embassy_usb_logger::run!(1024, level, driver);
     }
 }
 
@@ -192,6 +199,7 @@ mod main_tasks {
             };
 
             // We loop as long as we successfully receive new message updates. Every other case exits the loop.
+            // a.d. TODO move somewhere else
             let update_result = loop {
                 log::info!("Checking for updates");
                 match protocol.check_update(last_message_id).await {
@@ -264,6 +272,9 @@ mod main_tasks {
                     format_display_string("No messages :(", DisplayOptions::NormalMessage, &mut display);
                 }
 
+                // Note, must drop this before waiting below so that we do not hold the lock for too long.
+                drop(guard);
+
                 prio_message_opt = with_timeout(MESSAGE_DISPLAY_DURATION, PRIO_MESSAGE_SIGNAL.wait())
                     .await
                     .ok();
@@ -275,6 +286,8 @@ mod main_tasks {
 //// ---- Hardware initialization functions. ----------------------------------
 
 mod init {
+    use embassy_rp::peripherals::{DMA_CH0, PIN_23, PIN_24, PIN_25, PIN_29, PIO0};
+
     // a.d. TODO fix imports?
     use super::*;
 
@@ -336,21 +349,15 @@ mod init {
 
     /// ----- WIFI setup -----
     pub(super) async fn cyw43(
-        pwr: impl Pin,
-        cs: impl Pin,
-        pio: WifiPIO,
-        dio: impl PioPin,
-        clk: impl PioPin,
-        dma: WifiDMA,
-    ) -> (
-        cyw43::NetDriver<'static>,
-        cyw43::Control<'static>,
-        cyw43::Runner<'static, Output<'static>, PioSpi<'static, WifiPIO, 0, WifiDMA>>,
-    ) {
-        log::info!("WIFI initialization start.");
-        let fw = include_bytes!("../cyw43-firmware/43439A0.bin");
-        let clm = include_bytes!("../cyw43-firmware/43439A0_clm.bin");
-
+        spawner: Spawner,
+        pwr: PIN_23,
+        cs: PIN_25,
+        pio: PIO0,
+        dio: PIN_24,
+        clk: PIN_29,
+        dma: DMA_CH0,
+    ) -> (cyw43::NetDriver<'static>, cyw43::Control<'static>) {
+        log::info!("Initialization of cyw43 WIFI chip started.");
         let pwr = Output::new(pwr, Level::Low);
         let cs = Output::new(cs, Level::High);
         let mut pio = pio::Pio::new(pio, Irqs);
@@ -366,22 +373,29 @@ mod init {
         );
 
         static STATE: StaticCell<cyw43::State> = StaticCell::new();
-        let state = STATE.init_with(cyw43::State::new);
-        let (device, mut control, runner) = cyw43::new(state, pwr, spi, fw).await;
+        let state = STATE.init(cyw43::State::new());
+        log::info!("1");
+        let (device, mut control, runner) = cyw43::new(state, pwr, spi, FW).await;
+        spawner
+            .spawn(system_tasks::cyw43(runner))
+            .expect("Spawning cyw43_task failed.");
 
-        control.init(clm).await;
+        // a.d. TODO the cyw43 runner must have been spawned before doing this!
+        control.init(CLM).await;
         // a.d. TODO check which power management mode I want.
         control
             .set_power_management(cyw43::PowerManagementMode::PowerSave)
             .await;
 
-        (device, control, runner)
+        log::info!("Initialization of cyw43 WIFI chip finished.");
+        (device, control)
     }
 
     /// Setup network stack.
     pub(super) async fn net(
         net_device: cyw43::NetDriver<'static>,
     ) -> (net::Stack<'static>, net::Runner<'static, cyw43::NetDriver<'static>>) {
+        log::info!("Initializing network stack.");
         let config = net::Config::dhcpv4(Default::default());
         let seed = 0x0981_a34b_8288_01ff;
 
@@ -392,6 +406,8 @@ mod init {
 
     /// Setup WIFI connection.
     pub(super) async fn wifi(control: &mut cyw43::Control<'static>) {
+        log::info!("Initializing WIFI connection.");
+
         let wifi_ssid = match static_data::wifi_ssid() {
             Some(wifi_ssid) => {
                 if wifi_ssid.is_empty() {
@@ -459,11 +475,8 @@ async fn main(spawner: Spawner) {
     spawner
         .spawn(main_tasks::display_messages(display))
         .expect("Spawning display_messages_task failed.");
-    let (cyw43_driver, mut cyw43_control, cyw43_runner) =
-        init::cyw43(p.PIN_23, p.PIN_25, p.PIO0, p.PIN_24, p.PIN_29, p.DMA_CH0).await;
-    spawner
-        .spawn(system_tasks::cyw43(cyw43_runner))
-        .expect("Spawning cyw43_task failed.");
+    let (cyw43_driver, mut cyw43_control) =
+        init::cyw43(spawner, p.PIN_23, p.PIN_25, p.PIO0, p.PIN_24, p.PIN_29, p.DMA_CH0).await;
     let (net_stack, net_runner) = init::net(cyw43_driver).await;
     spawner
         .spawn(system_tasks::net(net_runner))
