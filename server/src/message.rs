@@ -4,27 +4,22 @@
 //!
 
 use anyhow::anyhow;
+use chrono::TimeDelta;
 use common::{
     consts::{IMAGE_BYTES_PER_PIXEL, IMAGE_HEIGHT, IMAGE_WIDTH, TEXT_BUFFER_SIZE},
     protocols::{pico::UpdateKind, web::NewMessage},
     types::{DeviceID, UpdateID},
 };
-use image::{imageops::resize, EncodableLayout, ImageBuffer, RgbImage};
+use image::RgbImage;
 use serde::{Deserialize, Serialize};
-use std::{
-    fs::{File, OpenOptions},
-    io::{Read, Write},
-    path::Path,
-    result,
-    time::Instant,
-};
+use std::{fs::File, path::Path, result};
 
-use crate::{AppError, Result, MESSAGE_PATH};
+use crate::{Result, MESSAGE_PATH};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum SenderID {
     Web,
-    Wechat,
+    Telegram,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -35,10 +30,11 @@ pub enum MessageContent {
 
 impl MessageContent {
     pub fn new_text(text: String) -> result::Result<Self, anyhow::Error> {
-        if text.bytes().len() > TEXT_BUFFER_SIZE {
-            return Err(anyhow!("Text message too long."));
+        if text.bytes().len() <= TEXT_BUFFER_SIZE {
+            Ok(MessageContent::Text(text))
+        } else {
+            Err(anyhow!("Text message too long."))
         }
-        Ok(MessageContent::Text(text))
     }
     pub fn new_texts(text: String) -> Result<Vec<Self>> {
         // TODO iterate in a way that we don't split up unicode chars.
@@ -56,7 +52,7 @@ impl MessageContent {
     }
 
     pub fn new_image(img: RgbImage) -> Result<Self> {
-        let img = resize(
+        let img = image::imageops::resize(
             &img,
             IMAGE_WIDTH as u32,
             IMAGE_HEIGHT as u32,
@@ -97,20 +93,22 @@ pub struct Message {
     pub id: UpdateID,
     pub receiver_id: DeviceID,
     pub sender_id: SenderID,
-    pub created_at: chrono::NaiveDateTime,
+    pub created_at: chrono::DateTime<chrono::Utc>,
     pub lifetime_secs: u32,
     pub content: MessageContent,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
-pub struct Messages(Vec<Message>);
+pub struct Messages {
+    inner: Vec<Message>,
+}
 
 impl Message {
     pub fn new(
         id: UpdateID,
         receiver_id: DeviceID,
         sender_id: SenderID,
-        created_at: chrono::NaiveDateTime,
+        created_at: chrono::DateTime<chrono::Utc>,
         lifetime: chrono::Duration,
         content: MessageContent,
     ) -> Self {
@@ -126,8 +124,39 @@ impl Message {
 }
 
 impl Messages {
+    pub fn dummy() -> Self {
+        Self {
+            inner: vec![
+                Message::new(
+                    0,
+                    0xcafebabe,
+                    SenderID::Web,
+                    chrono::Utc::now(),
+                    TimeDelta::minutes(10),
+                    MessageContent::Text("Dummy text".to_string()),
+                ),
+                Message::new(
+                    1,
+                    0xcafebabe,
+                    SenderID::Web,
+                    chrono::Utc::now(),
+                    TimeDelta::minutes(10),
+                    MessageContent::Image(include_bytes!("../pictures/love.bin").to_vec()),
+                ),
+                Message::new(
+                    2,
+                    0xcafebabe,
+                    SenderID::Web,
+                    chrono::Utc::now(),
+                    TimeDelta::minutes(10),
+                    MessageContent::Text("Another dummy text".to_string()),
+                ),
+            ],
+        }
+    }
+
     pub const fn new() -> Self {
-        Self(Vec::new())
+        Self { inner: Vec::new() }
     }
 
     fn load_file<P: AsRef<Path>>(p: &P) -> Result<Self> {
@@ -141,13 +170,13 @@ impl Messages {
     }
 
     pub fn store<P: AsRef<Path>>(&self, p: &P) -> Result<()> {
-        let file = OpenOptions::new().write(true).create(true).open(p)?;
+        let file = File::create(p)?;
         serde_json::to_writer(&file, self)?;
         Ok(())
     }
 
     pub fn add_message(&mut self, message: Message) {
-        self.0.push(message);
+        self.inner.push(message);
         self.store(&MESSAGE_PATH).ok();
     }
 
@@ -161,7 +190,7 @@ impl Messages {
             .and_then(|id| self.get_message(id))
             .map(|msg| msg.created_at);
 
-        self.0
+        self.inner
             .iter()
             .filter(|message| {
                 message.receiver_id == receiver_id && Some(message.created_at) > after
@@ -170,10 +199,10 @@ impl Messages {
     }
 
     pub fn get_message(&self, id: UpdateID) -> Option<&Message> {
-        self.0.iter().find(|message| message.id == id)
+        self.inner.iter().find(|message| message.id == id)
     }
 
     pub fn next_id(&self) -> UpdateID {
-        self.0.len() as UpdateID
+        self.inner.len() as UpdateID
     }
 }

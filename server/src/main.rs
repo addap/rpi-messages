@@ -12,6 +12,8 @@ const MESSAGE_PATH: &str = "./messages.json";
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
+    env_logger::init();
+
     // Restore messages from disk.
     let messages = init_messages().await;
 
@@ -26,7 +28,8 @@ async fn main() {
 
 // Messages need to be in an Arc to use axum::debug_handler.
 async fn init_messages() -> Arc<Mutex<Messages>> {
-    let messages = message::Messages::load(&MESSAGE_PATH);
+    // let messages = message::Messages::load(&MESSAGE_PATH);
+    let messages = Messages::dummy();
     Arc::new(Mutex::new(messages))
 }
 

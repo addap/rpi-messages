@@ -11,4 +11,5 @@ postcard = { version = "1.1", features = ["experimental-derive"], optional = tru
 default = []
 std = []
 pico = ["postcard", "serde"]
-web = ["serde/std", "std"]
+web = ["serde/std", "std", "postcard/use-std"]
+

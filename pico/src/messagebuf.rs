@@ -2,7 +2,7 @@ use core::borrow::Borrow;
 
 use common::{
     consts::{IMAGE_BUFFER_SIZE, IMAGE_HEIGHT, IMAGE_WIDTH, TEXT_BUFFER_SIZE},
-    protocol::Update,
+    protocols::pico::Update,
 };
 use embassy_time::{Duration, Instant};
 use embedded_graphics::{draw_target::DrawTarget, pixelcolor::Rgb565, prelude::*, primitives::Rectangle};

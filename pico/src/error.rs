@@ -1,7 +1,7 @@
 use core::fmt::{self, Write};
 use core::str::Utf8Error;
 
-use common::{consts::TEXT_BUFFER_SIZE, postcard};
+use common::consts::TEXT_BUFFER_SIZE;
 use derive_more::From;
 use embassy_net::tcp::ConnectError;
 use heapless::String;
@@ -14,7 +14,7 @@ pub type Result<T> = core::result::Result<T, Error>;
 #[derive(Debug, From)]
 pub enum ServerMessageError {
     Encoding(Utf8Error),
-    Format(common::protocol::Error),
+    Format(common::protocols::pico::Error),
 }
 
 #[derive(Debug, From)]
@@ -23,9 +23,15 @@ pub enum Error {
     WifiConfiguration,
     ServerConnect(ConnectError),
     Socket,
-    Postcard(postcard::Error),
+    // Postcard(postcard::Error),
     ServerMessage(ServerMessageError),
     MemoryError,
+}
+
+impl From<common::protocols::pico::Error> for Error {
+    fn from(value: common::protocols::pico::Error) -> Self {
+        Self::ServerMessage(ServerMessageError::Format(value))
+    }
 }
 
 impl fmt::Display for ServerMessageError {
@@ -37,19 +43,19 @@ impl fmt::Display for ServerMessageError {
     }
 }
 
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Error::WifiConnect(error) => todo!(),
-            Error::WifiConfiguration => todo!(),
-            Error::ServerConnect(connect_error) => todo!(),
-            Error::Socket => todo!(),
-            Error::Postcard(error) => todo!(),
-            Error::ServerMessage(server_message_error) => todo!(),
-            Error::MemoryError => todo!(),
-        }
-    }
-}
+// impl fmt::Display for Error {
+//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+//         match self {
+//             Error::WifiConnect(error) => todo!(),
+//             Error::WifiConfiguration => todo!(),
+//             Error::ServerConnect(connect_error) => todo!(),
+//             Error::Socket => todo!(),
+//             Error::Postcard(error) => todo!(),
+//             Error::ServerMessage(server_message_error) => todo!(),
+//             Error::MemoryError => todo!(),
+//         }
+//     }
+// }
 
 impl Error {
     pub fn to_display_string(&self) -> TextData {
@@ -58,7 +64,7 @@ impl Error {
             Error::WifiConnect(_) => write!(&mut text, "Cannot connect to Wifi. Please check Wifi settings."),
             Error::ServerConnect(_) => write!(&mut text, "Can't connect to server. Please check Wifi connection."),
             Error::Socket => write!(&mut text, "Internal socket error."),
-            Error::Postcard(_) => write!(&mut text, "Internal serialization error."),
+            // Error::Postcard(_) => write!(&mut text, "Internal serialization error."),
             Error::ServerMessage(e) => write!(&mut text, "Malformed message from server."),
             Error::MemoryError => write!(&mut text, "Cannot read Wifi data. Please check Wifi settings."),
             Error::WifiConfiguration => write!(&mut text, "Wifi settings are not configured yet. Please flash uf2."),
