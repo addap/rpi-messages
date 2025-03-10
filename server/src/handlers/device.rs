@@ -1,8 +1,9 @@
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::Arc;
+
 use anyhow::Context;
 use common::protocols::pico::serialization::SerDe;
 use common::protocols::pico::{CheckUpdateResult, ClientCommand, Update, UpdateKind};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;

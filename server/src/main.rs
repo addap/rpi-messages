@@ -1,9 +1,9 @@
+use core::fmt;
+use std::sync::Arc;
+
 use anyhow::anyhow;
 use axum::{http::StatusCode, response::IntoResponse};
-
-use core::fmt;
 use message::Messages;
-use std::{sync::Arc, thread};
 use tokio::{sync::Mutex, task};
 
 mod handlers;

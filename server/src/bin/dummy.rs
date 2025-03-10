@@ -1,9 +1,10 @@
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+
 use common::{
     consts::IMAGE_BUFFER_SIZE,
     protocols::pico::{serialization::SerDe, CheckUpdateResult, ClientCommand, Update, UpdateKind},
 };
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
 
 static IMO: &'static [u8; IMAGE_BUFFER_SIZE] = include_bytes!("../../pictures/love.bin");
 static BG: &'static [u8; IMAGE_BUFFER_SIZE] = include_bytes!("../../pictures/journey.bin");
