@@ -1,0 +1,23 @@
+{
+  "folders": [
+    {
+      "name": "pico",
+      "path": "."
+    },
+    {
+      "name": "common",
+      "path": "../common"
+    }
+  ],
+  "settings": {
+    "rust-analyzer.check.allTargets": false,
+    "rust-analyzer.cargo.noDefaultFeatures": true,
+    "rust-analyzer.showUnlinkedFileNotification": false,
+    "rust-analyzer.diagnostics.disabled": [
+      "unresolved-proc-macro"
+    ],
+    // uncomment the target of your chip.
+    "rust-analyzer.cargo.target": "thumbv6m-none-eabi",
+    "rust-analyzer.cargo.features": []
+  }
+}
