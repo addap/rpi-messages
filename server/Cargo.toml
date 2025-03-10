@@ -7,12 +7,9 @@ edition = "2021"
 
 [dependencies]
 common = { path = "../common", package = "rpi-messages-common", features = [ "web", "pico" ] }
-# use the same version as common crate
-# a.d. TODO can we remove this dependency?
-serde = { version = "*" }
-
+serde = { version = "1.0" }
 anyhow = { version = "1.0" }
-axum = { version = "0.8", features = [ "macros" ] }
+axum = { version = "0.8", features = [ "macros", "multipart" ] }
 chrono = { version = "0.4", features = [ "serde" ] }
 image = { version = "0.25" }
 rgb565 = { version = "0.1" }
@@ -21,5 +18,5 @@ tokio = { version = "1.43", features = [ "macros", "net", "io-util", "rt-multi-t
 log = { version = "0.4" }
 env_logger = { version = "0.11" }
 thiserror = { version = "2.0" }
-tower = { version = "0.5.2" }
-tower-http = {version = "0.6.2", features = [ "normalize-path" ] }
+tower = { version = "0.5" }
+tower-http = { version = "0.6", features = ["fs", "normalize-path", "trace"] }

@@ -6,7 +6,6 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
-// use std::net::{TcpListener, TcpStream};
 
 use crate::message::{MessageContent, Messages};
 
@@ -33,7 +32,7 @@ pub async fn run(messages: Arc<Mutex<Messages>>) {
                             let result = match guard.get_next_message(device_id, after) {
                                 Some(message) => {
                                     let message_update = Update {
-                                        lifetime_sec: message.lifetime_secs,
+                                        lifetime_sec: message.meta.duration.num_seconds() as u32,
                                         id: message.id,
                                         kind: UpdateKind::from(&message.content),
                                     };
@@ -48,14 +47,13 @@ pub async fn run(messages: Arc<Mutex<Messages>>) {
                         }
                         Ok(ClientCommand::RequestUpdate(id)) => {
                             let guard = messages.lock().await;
-                            let message =
-                                guard.get_message(id).expect("Requested message not found.");
+                            let message = guard.get_message(id).expect("Requested message not found.");
                             match &message.content {
                                 MessageContent::Text(text) => {
                                     socket.write_all(text.as_bytes()).await.unwrap();
                                 }
-                                MessageContent::Image(image) => {
-                                    socket.write_all(image.as_slice()).await.unwrap();
+                                MessageContent::Image { rgb565, .. } => {
+                                    socket.write_all(rgb565.as_slice()).await.unwrap();
                                 }
                             }
                         }

@@ -1,5 +1,6 @@
 use anyhow::anyhow;
 use axum::{http::StatusCode, response::IntoResponse};
+
 use core::fmt;
 use message::Messages;
 use std::{sync::Arc, thread};
@@ -48,6 +49,13 @@ impl AppError {
         Self {
             code: StatusCode::NOT_FOUND,
             error: anyhow!("{item} not found"),
+        }
+    }
+
+    pub fn bad_request(msg: &str) -> Self {
+        Self {
+            code: StatusCode::BAD_REQUEST,
+            error: anyhow!("{}", msg),
         }
     }
 }
