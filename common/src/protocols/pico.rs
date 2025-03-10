@@ -1,4 +1,4 @@
-use core::{error, fmt};
+use core::fmt;
 
 use postcard;
 use postcard::experimental::max_size::MaxSize;
@@ -97,8 +97,7 @@ pub mod serialization {
         const LENGTH_FIELD: usize = size_of::<Length>();
         const BUFFER_SIZE: usize = Self::LENGTH_FIELD + Self::POSTCARD_MAX_SIZE;
         // Statically that the POSTCARD_MAX_SIZE constant can be encoded in the length field of our messages.
-        const _ASSERT_LENGTH_REPRESENTABLE: () =
-            assert!(Self::POSTCARD_MAX_SIZE <= Length::MAX as usize);
+        const _ASSERT_LENGTH_REPRESENTABLE: () = assert!(Self::POSTCARD_MAX_SIZE <= Length::MAX as usize);
 
         // a.d. TODO remove maybe
         #[cfg(feature = "std")]
@@ -125,8 +124,7 @@ pub mod serialization {
             assert!(buf.len() == Self::BUFFER_SIZE);
 
             let len = Length::from_be_bytes([buf[0], buf[1]]) as usize;
-            let result =
-                postcard::from_bytes(&buf[Self::LENGTH_FIELD..(Self::LENGTH_FIELD + len)])?;
+            let result = postcard::from_bytes(&buf[Self::LENGTH_FIELD..(Self::LENGTH_FIELD + len)])?;
 
             Ok(result)
         }

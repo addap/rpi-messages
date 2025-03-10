@@ -3,6 +3,8 @@
 //!  
 //!
 
+use std::{fs::File, io::Cursor, path::Path};
+
 use anyhow::anyhow;
 use common::{
     consts::{IMAGE_BYTES_PER_PIXEL, IMAGE_HEIGHT, IMAGE_WIDTH, TEXT_BUFFER_SIZE},
@@ -11,7 +13,6 @@ use common::{
 };
 use image::{codecs::png::PngEncoder, ImageReader};
 use serde::{Deserialize, Serialize};
-use std::{fs::File, io::Cursor, path::Path};
 
 use crate::{Result, MESSAGE_PATH};
 
