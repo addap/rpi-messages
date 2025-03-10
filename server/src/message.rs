@@ -4,15 +4,14 @@
 //!
 
 use anyhow::anyhow;
-use chrono::TimeDelta;
 use common::{
     consts::{IMAGE_BYTES_PER_PIXEL, IMAGE_HEIGHT, IMAGE_WIDTH, TEXT_BUFFER_SIZE},
-    protocols::{pico::UpdateKind, web::NewMessage},
+    protocols::{pico::UpdateKind, web::MessageMeta},
     types::{DeviceID, UpdateID},
 };
-use image::RgbImage;
+use image::{codecs::png::PngEncoder, ImageReader};
 use serde::{Deserialize, Serialize};
-use std::{fs::File, path::Path, result};
+use std::{fs::File, io::Cursor, path::Path};
 
 use crate::{Result, MESSAGE_PATH};
 
@@ -25,11 +24,11 @@ pub enum SenderID {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum MessageContent {
     Text(String),
-    Image(Vec<u8>),
+    Image { png: Vec<u8>, rgb565: Vec<u8> },
 }
 
 impl MessageContent {
-    pub fn new_text(text: String) -> result::Result<Self, anyhow::Error> {
+    pub fn new_text(text: String) -> Result<Self> {
         if text.bytes().len() <= TEXT_BUFFER_SIZE {
             Ok(MessageContent::Text(text))
         } else {
@@ -51,23 +50,32 @@ impl MessageContent {
         Ok(texts)
     }
 
-    pub fn new_image(img: RgbImage) -> Result<Self> {
-        let img = image::imageops::resize(
-            &img,
+    pub fn new_image(img_data: Vec<u8>) -> Result<Self> {
+        let img_reader = ImageReader::new(Cursor::new(img_data))
+            .with_guessed_format()
+            .expect("Cursor IO never fails");
+        let img_orig = img_reader.decode()?;
+        let img_resized = image::imageops::resize(
+            &img_orig,
             IMAGE_WIDTH as u32,
             IMAGE_HEIGHT as u32,
             image::imageops::FilterType::Gaussian,
         );
 
-        let mut bytes = Vec::with_capacity(IMAGE_HEIGHT * IMAGE_WIDTH * IMAGE_BYTES_PER_PIXEL);
-        for px in img.pixels() {
-            let [r, g, b] = px.0;
+        // FIXME can we determine the encoded size to use with_capacity?
+        let mut png = Vec::new();
+        let png_encoder = PngEncoder::new(&mut png);
+        img_resized.write_with_encoder(png_encoder)?;
+
+        let mut rgb565 = Vec::with_capacity(IMAGE_HEIGHT * IMAGE_WIDTH * IMAGE_BYTES_PER_PIXEL);
+        for px in img_resized.pixels() {
+            let [r, g, b, _] = px.0;
 
             let [c1, c2] = rgb565::Rgb565::from_srgb888_components(r, g, b).to_rgb565_be();
-            bytes.push(c1);
-            bytes.push(c2);
+            rgb565.push(c1);
+            rgb565.push(c2);
         }
-        Ok(MessageContent::Image(bytes))
+        Ok(MessageContent::Image { png, rgb565 })
     }
 }
 
@@ -75,15 +83,7 @@ impl From<&MessageContent> for UpdateKind {
     fn from(value: &MessageContent) -> UpdateKind {
         match value {
             MessageContent::Text(text) => UpdateKind::Text(text.len() as u32),
-            MessageContent::Image(_) => UpdateKind::Image,
-        }
-    }
-}
-
-impl From<NewMessage> for MessageContent {
-    fn from(value: NewMessage) -> Self {
-        match value {
-            NewMessage::Text { text } => MessageContent::Text(text),
+            MessageContent::Image { .. } => UpdateKind::Image,
         }
     }
 }
@@ -91,10 +91,9 @@ impl From<NewMessage> for MessageContent {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Message {
     pub id: UpdateID,
-    pub receiver_id: DeviceID,
+    pub meta: MessageMeta,
     pub sender_id: SenderID,
     pub created_at: chrono::DateTime<chrono::Utc>,
-    pub lifetime_secs: u32,
     pub content: MessageContent,
 }
 
@@ -106,18 +105,16 @@ pub struct Messages {
 impl Message {
     pub fn new(
         id: UpdateID,
-        receiver_id: DeviceID,
+        meta: MessageMeta,
         sender_id: SenderID,
         created_at: chrono::DateTime<chrono::Utc>,
-        lifetime: chrono::Duration,
         content: MessageContent,
     ) -> Self {
         Self {
             id,
-            receiver_id,
+            meta,
             sender_id,
             created_at,
-            lifetime_secs: lifetime.num_seconds() as u32,
             content,
         }
     }
@@ -125,30 +122,35 @@ impl Message {
 
 impl Messages {
     pub fn dummy() -> Self {
+        let meta = MessageMeta {
+            receiver_id: 0xcafebabe,
+            duration: chrono::Duration::hours(24),
+        };
+
         Self {
             inner: vec![
                 Message::new(
                     0,
-                    0xcafebabe,
+                    meta,
                     SenderID::Web,
                     chrono::Utc::now(),
-                    TimeDelta::minutes(10),
                     MessageContent::Text("Dummy text".to_string()),
                 ),
                 Message::new(
                     1,
-                    0xcafebabe,
+                    meta,
                     SenderID::Web,
                     chrono::Utc::now(),
-                    TimeDelta::minutes(10),
-                    MessageContent::Image(include_bytes!("../pictures/love.bin").to_vec()),
+                    MessageContent::Image {
+                        png: include_bytes!("../pictures/love.png").to_vec(),
+                        rgb565: include_bytes!("../pictures/love.bin").to_vec(),
+                    },
                 ),
                 Message::new(
                     2,
-                    0xcafebabe,
+                    meta,
                     SenderID::Web,
                     chrono::Utc::now(),
-                    TimeDelta::minutes(10),
                     MessageContent::Text("Another dummy text".to_string()),
                 ),
             ],
@@ -180,21 +182,13 @@ impl Messages {
         self.store(&MESSAGE_PATH).ok();
     }
 
-    pub fn get_next_message(
-        &self,
-        receiver_id: DeviceID,
-        after: Option<UpdateID>,
-    ) -> Option<&Message> {
+    pub fn get_next_message(&self, receiver_id: DeviceID, after: Option<UpdateID>) -> Option<&Message> {
         // first get the timestamp of the given id.
-        let after = after
-            .and_then(|id| self.get_message(id))
-            .map(|msg| msg.created_at);
+        let after = after.and_then(|id| self.get_message(id)).map(|msg| msg.created_at);
 
         self.inner
             .iter()
-            .filter(|message| {
-                message.receiver_id == receiver_id && Some(message.created_at) > after
-            })
+            .filter(|message| message.meta.receiver_id == receiver_id && Some(message.created_at) > after)
             .min_by_key(|message| message.created_at)
     }
 

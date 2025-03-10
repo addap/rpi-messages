@@ -87,11 +87,13 @@ impl CheckUpdateResult {
 }
 
 pub mod serialization {
+    use serde::de::DeserializeOwned;
+
     use super::*;
 
     type Length = u16;
 
-    pub trait SerDe: Serialize + for<'de> Deserialize<'de> + MaxSize {
+    pub trait SerDe: Serialize + DeserializeOwned + MaxSize {
         const LENGTH_FIELD: usize = size_of::<Length>();
         const BUFFER_SIZE: usize = Self::LENGTH_FIELD + Self::POSTCARD_MAX_SIZE;
         // Statically that the POSTCARD_MAX_SIZE constant can be encoded in the length field of our messages.

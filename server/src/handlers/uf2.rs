@@ -1,14 +1,13 @@
 use anyhow::anyhow;
 use axum::{
-    http::{header, HeaderMap, StatusCode},
-    response::{Html, IntoResponse, Response},
-    routing::{get, head, post},
-    Form, Router,
+    http::{header, HeaderMap},
+    response::IntoResponse,
+    Form,
 };
 use common::consts::{WIFI_PW_LEN, WIFI_SSID_LEN};
 use serde::Deserialize;
 
-use crate::{AppError, Result, WebResult};
+use crate::WebResult;
 
 #[derive(Deserialize)]
 pub struct WifiData {

@@ -23,7 +23,6 @@ pub enum Error {
     WifiConfiguration,
     ServerConnect(ConnectError),
     Socket,
-    // Postcard(postcard::Error),
     ServerMessage(ServerMessageError),
     MemoryError,
 }
