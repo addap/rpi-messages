@@ -1,6 +1,7 @@
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 
+use common::types::UpdateID;
 use common::{
     consts::IMAGE_BUFFER_SIZE,
     protocols::pico::{serialization::SerDe, CheckUpdateResult, ClientCommand, Update, UpdateKind},
@@ -31,7 +32,7 @@ fn main() {
                                     CheckUpdateResult::Update(Update {
                                         lifetime_sec: 60 * 100,
                                         kind: UpdateKind::Text(TEXT1.len() as u32),
-                                        id: 0,
+                                        id: UpdateID(0),
                                     })
                                     // } else {
                                 }
@@ -41,7 +42,7 @@ fn main() {
                                     CheckUpdateResult::Update(Update {
                                         lifetime_sec: 60 * 100,
                                         kind: UpdateKind::Image,
-                                        id: 1,
+                                        id: UpdateID(1),
                                     })
                                 }
                                 2 => {
@@ -49,7 +50,7 @@ fn main() {
                                     CheckUpdateResult::Update(Update {
                                         lifetime_sec: 60 * 100,
                                         kind: UpdateKind::Text(TEXT2.len() as u32),
-                                        id: 2,
+                                        id: UpdateID(2),
                                     })
                                 }
                                 // } else {
@@ -58,7 +59,7 @@ fn main() {
                                     CheckUpdateResult::Update(Update {
                                         lifetime_sec: 60 * 100,
                                         kind: UpdateKind::Image,
-                                        id: 3,
+                                        id: UpdateID(3),
                                     })
                                 }
                                 _ => {
@@ -73,19 +74,19 @@ fn main() {
                             stage += 1;
                         }
                         ClientCommand::RequestUpdate(id) => match id {
-                            0 => {
+                            UpdateID(0) => {
                                 println!("Got request for update text.");
                                 socket.write_all(TEXT1.as_bytes()).unwrap()
                             }
-                            1 => {
+                            UpdateID(1) => {
                                 println!("Got request for update image.");
                                 socket.write_all(IMO).unwrap()
                             }
-                            2 => {
+                            UpdateID(2) => {
                                 println!("Got request for update text.");
                                 socket.write_all(TEXT2.as_bytes()).unwrap()
                             }
-                            3 => {
+                            UpdateID(3) => {
                                 println!("Got request for update image.");
                                 socket.write_all(BG).unwrap()
                             }
