@@ -72,7 +72,7 @@ impl IntoResponse for AppError {
     }
 }
 
-type Result<T> = std::result::Result<T, anyhow::Error>;
+type Result<T> = anyhow::Result<T>;
 type WebResult<T> = std::result::Result<T, AppError>;
 
 impl From<anyhow::Error> for AppError {
