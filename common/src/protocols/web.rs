@@ -18,4 +18,5 @@ pub struct NewTextMessage {
 pub struct NewImageMessage {
     pub meta: MessageMeta,
     pub image: Vec<u8>,
+    pub mime: String,
 }

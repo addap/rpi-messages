@@ -5,13 +5,14 @@
 
 use std::{fs::File, io::Cursor, path::Path};
 
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
+use bytes::Bytes;
 use common::{
     consts::{IMAGE_BYTES_PER_PIXEL, IMAGE_HEIGHT, IMAGE_WIDTH, TEXT_BUFFER_SIZE},
     protocols::{pico::UpdateKind, web::MessageMeta},
     types::{DeviceID, UpdateID},
 };
-use image::{codecs::png::PngEncoder, ImageReader};
+use image::{codecs::png::PngEncoder, DynamicImage, ImageFormat, ImageReader, ImageResult};
 use serde::{Deserialize, Serialize};
 
 use crate::{Result, MESSAGE_PATH};
@@ -51,13 +52,9 @@ impl MessageContent {
         Ok(texts)
     }
 
-    pub fn new_image(img_data: Vec<u8>) -> Result<Self> {
-        let img_reader = ImageReader::new(Cursor::new(img_data))
-            .with_guessed_format()
-            .expect("Cursor IO never fails");
-        let img_orig = img_reader.decode()?;
+    pub fn new_image(img: DynamicImage) -> Result<Self> {
         let img_resized = image::imageops::resize(
-            &img_orig,
+            &img,
             IMAGE_WIDTH as u32,
             IMAGE_HEIGHT as u32,
             image::imageops::FilterType::Gaussian,
@@ -79,7 +76,6 @@ impl MessageContent {
         Ok(MessageContent::Image { png, rgb565 })
     }
 }
-
 impl From<&MessageContent> for UpdateKind {
     fn from(value: &MessageContent) -> UpdateKind {
         match value {
@@ -87,6 +83,19 @@ impl From<&MessageContent> for UpdateKind {
             MessageContent::Image { .. } => UpdateKind::Image,
         }
     }
+}
+
+pub fn image_from_bytes_mime(bytes: &[u8], mime: String) -> ImageResult<DynamicImage> {
+    let mut img_reader = ImageReader::new(Cursor::new(bytes));
+    match ImageFormat::from_mime_type(mime) {
+        Some(format) => {
+            img_reader.set_format(format);
+        }
+        None => {
+            img_reader = img_reader.with_guessed_format().expect("Cursor io does not fail");
+        }
+    }
+    img_reader.decode()
 }
 
 #[derive(Debug, Serialize, Deserialize)]

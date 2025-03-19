@@ -20,3 +20,4 @@ env_logger = { version = "0.11" }
 thiserror = { version = "2.0" }
 tower = { version = "0.5" }
 tower-http = { version = "0.6", features = ["fs", "normalize-path", "trace"] }
+bytes = "1.10.1"
