@@ -5,6 +5,8 @@
 <head>
     <title>Test Form</title>
     <meta charset="utf-8" />
+    <script src="./index.js" />
+    </script>
 </head>
 
 <body>
@@ -14,11 +16,18 @@
 
         <input type="submit" value="submit urlencode" />
     </form>
-    <form method="post" enctype="multipart/form-data" action="/mp_new_image_message">
-        <label for="ipt-file2">Image:</label>
-        <input id="ipt-file2" name="image2" type="file" />
 
-        <input type="submit" value="submit multipart" />
+    <form action="">
+        <label for="mp-file">Image:</label>
+        <input id="mp-file" type="file" />
+
+        <label for="mp-receiver">Receiver ID:</label>
+        <input id="mp-receiver" type="text" />
+
+        <label for="mp-duration">Duration (h):</label>
+        <input id="mp-duration" type="number" />
+
+        <input id="mp-submit" type="button" value="submit" />
     </form>
 </body>
 
