@@ -124,21 +124,21 @@ impl Message {
 impl Messages {
     pub fn dummy() -> Self {
         let meta = MessageMeta {
-            receiver_id: 0xcafebabe,
+            receiver_id: DeviceID(0xcafebabe),
             duration: chrono::Duration::hours(24),
         };
 
         Self {
             inner: vec![
                 Message::new(
-                    0,
+                    UpdateID(0),
                     meta,
                     SenderID::Web,
                     chrono::Utc::now(),
                     MessageContent::Text("Dummy text".to_string()),
                 ),
                 Message::new(
-                    1,
+                    UpdateID(1),
                     meta,
                     SenderID::Web,
                     chrono::Utc::now(),
@@ -148,7 +148,7 @@ impl Messages {
                     },
                 ),
                 Message::new(
-                    2,
+                    UpdateID(2),
                     meta,
                     SenderID::Web,
                     chrono::Utc::now(),
@@ -198,6 +198,6 @@ impl Messages {
     }
 
     pub fn next_id(&self) -> UpdateID {
-        self.inner.len() as UpdateID
+        UpdateID(self.inner.len() as u32)
     }
 }

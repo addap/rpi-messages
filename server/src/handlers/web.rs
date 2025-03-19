@@ -16,8 +16,8 @@ use axum::{
 };
 use chrono::Utc;
 use common::{
-    protocols::web::{NewImageMessage, NewTextMessage},
-    types::UpdateID,
+    protocols::web::{MessageMeta, NewImageMessage, NewTextMessage},
+    types::{DeviceID, UpdateID},
 };
 use serde::{de, Deserialize, Deserializer};
 use tokio::sync::Mutex;
@@ -98,7 +98,7 @@ async fn mp_new_image_message(
 #[derive(Debug, Deserialize)]
 struct LatestQueryParams {
     #[serde(default, deserialize_with = "empty_string_as_none")]
-    after: Option<i32>,
+    after: Option<UpdateID>,
 }
 
 /// Serde deserialization decorator to map empty Strings to None,
@@ -122,14 +122,10 @@ async fn latest_message(
     Path(for_device): Path<String>,
     Query(params): Query<LatestQueryParams>,
 ) -> WebResult<Response> {
-    let receiver_id = u32::from_str_radix(&for_device, 16).map_err(|e| {
-        log::error!("{}", e);
-        AppError::bad_request("u32 hex")
-    })?;
-    let after = params.after.map(|v| v as UpdateID);
+    let receiver_id = DeviceID::from_str(&for_device).context("failed to parse receiver_id")?;
 
     let guard = messages.lock().await;
-    match guard.get_next_message(receiver_id, after) {
+    match guard.get_next_message(receiver_id, params.after) {
         Some(Message {
             content: MessageContent::Text(text),
             ..
