@@ -8,8 +8,8 @@ use std::{
 
 use anyhow::anyhow;
 use axum::{
-    extract::{Multipart, Path, Query, Request, State},
-    http::{header, StatusCode},
+    extract::{DefaultBodyLimit, Multipart, Path, Query, Request, State},
+    http::header,
     response::{IntoResponse, Response},
     routing::{get, post},
     Form, Json, Router, ServiceExt,
@@ -146,7 +146,10 @@ pub async fn run(messages: Arc<Mutex<Messages>>) {
         .route_service("/index.html", ServeFile::new(INDEX_PATH))
         .route("/new_text_message", post(new_text_message))
         .route("/new_image_message", post(new_image_message))
-        .route("/mp_new_image_message", post(mp_new_image_message))
+        .route(
+            "/mp_new_image_message",
+            post(mp_new_image_message).layer(DefaultBodyLimit::max(UPLOAD_BODY_LIMIT)),
+        )
         .route("/latest/{for_device}", get(latest_message))
         .with_state(messages)
         .route("/submit_wifi_config", post(submit_wifi_config))
