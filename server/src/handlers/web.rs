@@ -1,12 +1,11 @@
 use std::{
     fmt,
     net::{IpAddr, Ipv4Addr, SocketAddr},
-    path,
     str::FromStr,
     sync::Arc,
 };
 
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use axum::{
     extract::{DefaultBodyLimit, Multipart, Path, Query, Request, State},
     http::header,
@@ -14,6 +13,7 @@ use axum::{
     routing::{get, post},
     Form, Json, Router, ServiceExt,
 };
+use bytes::Bytes;
 use chrono::Utc;
 use common::{
     protocols::web::{MessageMeta, NewImageMessage, NewTextMessage},
@@ -26,11 +26,13 @@ use tower_http::{normalize_path::NormalizePathLayer, services::ServeFile, trace:
 
 use super::uf2::submit_wifi_config;
 use crate::{
-    message::{Message, MessageContent, Messages, SenderID},
+    message::{image_from_bytes_mime, Message, MessageContent, Messages, SenderID},
     AppError, WebResult,
 };
 
 const ADDRESS: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 3000);
+// Define maximum upload file size to be 8MB.
+const UPLOAD_BODY_LIMIT: usize = 8 * 1024 * 1024;
 static INDEX_PATH: &str = "webclient/index.html";
 
 #[axum::debug_handler]
@@ -58,8 +60,9 @@ async fn new_image_message(
     Form(new_message): Form<NewImageMessage>,
 ) -> WebResult<Json<()>> {
     log::info!("urlencode handler");
+    let image = image_from_bytes_mime(&new_message.image, new_message.mime).context("parsing image failed")?;
     let mut guard = messages.lock().await;
-    let new_message_content = MessageContent::new_image(new_message.image)?;
+    let new_message_content = MessageContent::new_image(image)?;
     let new_message = Message::new(
         guard.next_id(),
         new_message.meta,
@@ -77,18 +80,50 @@ async fn mp_new_image_message(
     State(messages): State<Arc<Mutex<Messages>>>,
     mut multipart: Multipart,
 ) -> WebResult<String> {
-    // let mut guard = messages.lock().await;
-    // let new_message_content = MessageContent::new_image(new_message.image)?;
-    // let new_message = Message::new(
-    //     guard.next_id(),
-    //     new_message.meta,
-    //     SenderID::Web,
-    //     Utc::now(),
-    //     new_message_content,
-    // );
+    let mut image_bytes_mime: Option<(Bytes, String)> = None;
+    let mut receiver: Option<DeviceID> = None;
+    let mut duration: Option<chrono::Duration> = None;
 
-    // guard.add_message(new_message);
-    log::info!("Multipart handler");
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .context("multipart field extraction failed")?
+    {
+        let name = field.name().context("field name extraction failed")?;
+
+        match name {
+            "image" => {
+                let mime = field
+                    .content_type()
+                    .context("image field content type extraction failed")?
+                    .to_owned();
+                let data = field.bytes().await.context("image field bytes extraction failed")?;
+                image_bytes_mime = Some((data.clone(), mime));
+            }
+            "receiver" => {
+                let data = field.text().await.context("recevier field text extraction failed")?;
+                receiver = Some(DeviceID::from_str(&data).context("parsing DeviceID failed")?);
+            }
+            "duration" => {
+                let data = field.text().await.context("duration field text extraction failed")?;
+                let seconds = i64::from_str(&data).context("duration parsing failed")?;
+                duration = Some(chrono::Duration::seconds(seconds));
+            }
+            _ => return Err(anyhow!("malformed multipart field {name}").into()),
+        }
+    }
+
+    let (bytes, mime) = image_bytes_mime.context("image missing")?;
+    let image = image_from_bytes_mime(&bytes, mime).context("parsing image failed")?;
+    let receiver_id = receiver.context("receiver ID missing")?;
+    let duration = duration.context("duration missing")?;
+    let meta = MessageMeta { receiver_id, duration };
+
+    let mut guard = messages.lock().await;
+    let new_message_content = MessageContent::new_image(image)?;
+    let new_message = Message::new(guard.next_id(), meta, SenderID::Web, Utc::now(), new_message_content);
+    guard.add_message(new_message);
+
     Ok("OK".to_string())
 }
 
