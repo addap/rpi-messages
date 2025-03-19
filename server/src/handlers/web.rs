@@ -16,7 +16,7 @@ use axum::{
 use bytes::Bytes;
 use chrono::Utc;
 use common::{
-    protocols::web::{MessageMeta, NewImageMessage, NewTextMessage},
+    protocols::web::{MessageMeta, NewImageMessage, NewMessageCreated, NewTextMessage},
     types::{DeviceID, UpdateID},
 };
 use serde::{de, Deserialize, Deserializer};
@@ -34,6 +34,7 @@ const ADDRESS: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)
 // Define maximum upload file size to be 8MB.
 const UPLOAD_BODY_LIMIT: usize = 8 * 1024 * 1024;
 static INDEX_PATH: &str = "webclient/index.html";
+static INDEX_JS_PATH: &str = "webclient/index.js";
 
 #[axum::debug_handler]
 async fn new_text_message(
@@ -79,7 +80,8 @@ async fn new_image_message(
 async fn mp_new_image_message(
     State(messages): State<Arc<Mutex<Messages>>>,
     mut multipart: Multipart,
-) -> WebResult<String> {
+) -> WebResult<Json<NewMessageCreated>> {
+    log::info!("Handling new image multipart message.");
     let mut image_bytes_mime: Option<(Bytes, String)> = None;
     let mut receiver: Option<DeviceID> = None;
     let mut duration: Option<chrono::Duration> = None;
@@ -90,6 +92,7 @@ async fn mp_new_image_message(
         .context("multipart field extraction failed")?
     {
         let name = field.name().context("field name extraction failed")?;
+        log::info!("Extracting field '{name}'");
 
         match name {
             "image" => {
@@ -98,15 +101,19 @@ async fn mp_new_image_message(
                     .context("image field content type extraction failed")?
                     .to_owned();
                 let data = field.bytes().await.context("image field bytes extraction failed")?;
+                log::info!("\tis image with mime type '{mime}' containing {} bytes.", data.len());
                 image_bytes_mime = Some((data.clone(), mime));
             }
             "receiver" => {
                 let data = field.text().await.context("recevier field text extraction failed")?;
-                receiver = Some(DeviceID::from_str(&data).context("parsing DeviceID failed")?);
+                let receiver_id = DeviceID::from_str(&data).context("parsing DeviceID failed")?;
+                log::info!("\tis receiver id '{:#010X}'.", receiver_id);
+                receiver = Some(receiver_id);
             }
             "duration" => {
                 let data = field.text().await.context("duration field text extraction failed")?;
                 let seconds = i64::from_str(&data).context("duration parsing failed")?;
+                log::info!("\tis duration of '{seconds}' seconds.");
                 duration = Some(chrono::Duration::seconds(seconds));
             }
             _ => return Err(anyhow!("malformed multipart field {name}").into()),
@@ -119,12 +126,14 @@ async fn mp_new_image_message(
     let duration = duration.context("duration missing")?;
     let meta = MessageMeta { receiver_id, duration };
 
-    let mut guard = messages.lock().await;
     let new_message_content = MessageContent::new_image(image)?;
-    let new_message = Message::new(guard.next_id(), meta, SenderID::Web, Utc::now(), new_message_content);
+    let mut guard = messages.lock().await;
+    let id = guard.next_id();
+    let new_message = Message::new(id, meta, SenderID::Web, Utc::now(), new_message_content);
     guard.add_message(new_message);
+    drop(guard);
 
-    Ok("OK".to_string())
+    Ok(Json(NewMessageCreated { id }))
 }
 
 // Note, it's important to put the parameters into a struct since the FromRequestParts impl for Query
@@ -178,7 +187,9 @@ async fn latest_message(
 
 pub async fn run(messages: Arc<Mutex<Messages>>) {
     let router = Router::new()
+        .route_service("/", ServeFile::new(INDEX_PATH))
         .route_service("/index.html", ServeFile::new(INDEX_PATH))
+        .route_service("/index.js", ServeFile::new(INDEX_JS_PATH))
         .route("/new_text_message", post(new_text_message))
         .route("/new_image_message", post(new_image_message))
         .route(
