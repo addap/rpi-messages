@@ -21,7 +21,7 @@ use embassy_rp::{
     bind_interrupts,
     gpio::{Level, Output, Pin},
     peripherals::USB,
-    pio::{self, PioPin},
+    pio,
     spi::{self, Blocking, ClkPin, MosiPin, Spi},
     usb::{self, Driver},
 };
@@ -96,204 +96,34 @@ bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => usb::InterruptHandler<USB>;
 });
 
-//// ---- System tasks for managing peripherals/debug. -------------------------
-mod system_tasks {
-    use super::*;
-
-    /// Interacts with the WIFI chip over some internal SPI.
-    #[embassy_executor::task]
-    pub(super) async fn cyw43(
-        runner: cyw43::Runner<'static, Output<'static>, PioSpi<'static, WifiPIO, 0, WifiDMA>>,
-    ) -> ! {
-        log::info!("System task cyw43 starting.");
-        runner.run().await
-    }
-
-    /// Manages the network stack (so I guess it handles connections, creating sockets and actually sending stuff over sockets).
-    #[embassy_executor::task]
-    pub(super) async fn net(mut runner: net::Runner<'static, cyw43::NetDriver<'static>>) -> ! {
-        log::info!("System task net starting.");
-        runner.run().await
-    }
-
-    /// Sets the global logger and sends log messages over USB.
-    #[embassy_executor::task]
-    pub(super) async fn logger(driver: Driver<'static, USB>) {
-        log::info!("System task logger starting.");
-        let level = env!("LOG_LEVEL").parse().unwrap_or(log::LevelFilter::Info);
-        embassy_usb_logger::run!(1024, level, driver);
-    }
-}
-
-//// ---- Main tasks to implement the device features. ------------------------
-mod main_tasks {
-    use super::*;
-
-    async fn handle_update<'a>(update: Update, protocol: &mut fetch_protocol::Socket<'_>) -> Result<()> {
-        log::info!("Received an update. Acquiring mutex to change message buffer.");
-        let mut guard = MESSAGES.lock().await;
-        let messages: &mut Messages = &mut guard;
-
-        match update.kind {
-            UpdateKind::Text(_) => {
-                log::info!("Requesting text update.");
-                let message = messages.next_available_text();
-                message.set_meta(&update);
-
-                // SAFETY - We read the bytes from the network into the next available text message.
-                // If that fails -- in which case the buffer could be half-filled -- or if the buffer does not contain valid UTF-8 in the end, we clear the string.
-                // We are holding the message lock so no one else can access the the unsafe buffer contents while this future may be paused.
-                unsafe {
-                    let message_buf = message.data.text.as_mut_vec();
-                    if let Err(e) = protocol.request_update(&update, message_buf).await {
-                        message_buf.clear();
-                        return Err(e);
-                    }
-
-                    match core::str::from_utf8(message_buf) {
-                        Ok(text) => {
-                            log::info!("Received text update: {}", text);
-                        }
-                        Err(e) => {
-                            message_buf.clear();
-                            return Err(Error::ServerMessage(ServerMessageError::Encoding(e)));
-                        }
-                    }
-                }
-            }
-            UpdateKind::Image => {
-                log::info!("Requesting image update.");
-                let message = messages.next_available_image();
-                message.set_meta(&update);
-                let message_buf = message.data.image.as_mut();
-                protocol.request_update(&update, message_buf).await?;
-            }
-        };
-
-        Ok(())
-    }
-
-    /// This task connects to the configured server and periodically fetches new messages to update the global [`MESSAGES`] object.
-    ///
-    /// - [`stack`]: The network stack. Used to create sockets.
-    /// - [`control`]: The driver of the WIFI chip. TODO usage not clear.
-    #[embassy_executor::task]
-    pub(super) async fn fetch_data(
-        mut state: fetch_protocol::State,
-        stack: net::Stack<'static>,
-        mut control: cyw43::Control<'static>,
-    ) {
-        // We save the id of the latest message we received to send to the server for the next update check.
-        let mut last_message_id = None;
-
-        loop {
-            log::info!("Creating new connection.");
-            let protocol = fetch_protocol::Socket::new(&mut state, stack, &mut control).await;
-            let mut protocol = match protocol {
-                Ok(protocol) => protocol,
-                Err(e) => {
-                    handle_error(e);
-                    Timer::after(SERVER_CONNECT_ERROR_WAIT).await;
-                    continue;
-                }
-            };
-
-            // We loop as long as we successfully receive new message updates. Every other case exits the loop.
-            // a.d. TODO move somewhere else
-            let update_result = loop {
-                log::info!("Checking for updates");
-                match protocol.check_update(last_message_id).await {
-                    Err(e) => {
-                        break Err(e);
-                    }
-                    Ok(CheckUpdateResult::NoUpdate) => {
-                        log::info!("No updates for now. Sleeping.");
-                        break Ok(());
-                    }
-                    Ok(CheckUpdateResult::Update(update)) => match handle_update(update, &mut protocol).await {
-                        Ok(()) => {
-                            last_message_id = Some(cmp::max(last_message_id.unwrap_or(0), update.id));
-                        }
-                        Err(e) => break Err(e),
-                    },
-                }
-            };
-
-            protocol.abort().await;
-
-            if let Err(e) = update_result {
-                handle_error(e);
-            }
-            Timer::after(MESSAGE_FETCH_INTERVAL).await;
-        }
-    }
-
-    /// Periodically get the next messages from the global [`MESSAGES`] object and display it.
-    ///
-    /// - [`display`]: a driver to interact with the display's ST7735 chip.
-    #[embassy_executor::task]
-    pub(super) async fn display_messages(mut display: ST7735) {
-        let mut last_message_time = Instant::MIN;
-        let mut prio_message_opt: Option<TextData> = None;
-
-        // Each time the loop is entered we immediately display a priority message if we are currently holding one.
-        // Priority messages are shown for `PRIO_MESSAGE_DISPLAY_DURATION` or until a new priority message arrives.
-        // If there is no priority message we display the next non-priority message and then wait for `MESSAGE_DISPLAY_DURATION`
-        // or until a new priority message arrives.
-        loop {
-            log::info!("Check if priority message exists.");
-
-            if let Some(prio_message) = prio_message_opt.take() {
-                format_display_string(&prio_message.text, DisplayOptions::PriorityMessage, &mut display);
-
-                prio_message_opt = with_timeout(PRIO_MESSAGE_DISPLAY_DURATION, PRIO_MESSAGE_SIGNAL.wait())
-                    .await
-                    .ok();
-            } else {
-                log::info!("No priority message found. Acquiring mutex to read message buffer.");
-                let guard = MESSAGES.lock().await;
-                let messages: &Messages = &guard;
-                if let Some(next_message) = messages.next_display_message_generic(last_message_time) {
-                    last_message_time = next_message.meta.updated_at;
-
-                    match next_message.data {
-                        DisplayMessage::Text(data) => {
-                            log::info!("Showing a text message: {}", data.text.as_str());
-                            format_display_string(&data.text, DisplayOptions::NormalMessage, &mut display);
-                        }
-                        DisplayMessage::Image(data) => {
-                            log::info!("Showing an image message.");
-                            let raw: ImageRawBE<Rgb565> = ImageRaw::new(&data.image, IMAGE_WIDTH as u32);
-                            // a.d. unwrap() cannot panic since our display implementation has `Infallibe` as the error type.
-                            Image::new(&raw, Point::zero()).draw(&mut display.dev).unwrap();
-                        }
-                    }
-                } else {
-                    format_display_string("No messages :(", DisplayOptions::NormalMessage, &mut display);
-                }
-
-                // Note, must drop this before waiting below so that we do not hold the lock for too long.
-                drop(guard);
-
-                prio_message_opt = with_timeout(MESSAGE_DISPLAY_DURATION, PRIO_MESSAGE_SIGNAL.wait())
-                    .await
-                    .ok();
-            }
-        }
-    }
-}
-
 //// ---- Hardware initialization functions. ----------------------------------
 
 mod init {
-    use embassy_rp::peripherals::{DMA_CH0, PIN_23, PIN_24, PIN_25, PIN_29, PIO0};
+    use embassy_rp::{
+        gpio,
+        peripherals::{DMA_CH0, PIN_23, PIN_24, PIN_25, PIN_29, PIO0},
+    };
 
     // a.d. TODO fix imports?
     use super::*;
 
+    /// ----- Reset button setup -----
+    pub(super) async fn reset(spawner: Spawner, pin: impl Pin) {
+        let button = gpio::Input::new(pin, gpio::Pull::Up);
+        spawner
+            .spawn(system_tasks::resetter(button))
+            .expect("Spawning resetter task failed.")
+    }
+
     /// ----- USB logging setup -----
-    pub(super) async fn usb(usb: USB) -> usb::Driver<'static, USB> {
-        Driver::new(usb, Irqs)
+    pub(super) async fn usb(spawner: Spawner, usb: USB) {
+        let driver = Driver::new(usb, Irqs);
+
+        spawner
+            .spawn(system_tasks::logger(driver))
+            .expect("Spawning logger task failed.");
+        // Wait until the USB host picks up our device.
+        Timer::after(INIT_LOGGING_WAIT).await;
     }
 
     /// ----- Display setup -----
@@ -392,16 +222,19 @@ mod init {
     }
 
     /// Setup network stack.
-    pub(super) async fn net(
-        net_device: cyw43::NetDriver<'static>,
-    ) -> (net::Stack<'static>, net::Runner<'static, cyw43::NetDriver<'static>>) {
+    pub(super) async fn net(spawner: Spawner, net_device: cyw43::NetDriver<'static>) -> net::Stack<'static> {
         log::info!("Initializing network stack.");
         let config = net::Config::dhcpv4(Default::default());
         let seed = 0x0981_a34b_8288_01ff;
 
         // Init network stack
         static RESOURCES: StaticCell<StackResources<2>> = StaticCell::new();
-        net::new(net_device, config, RESOURCES.init(StackResources::new()), seed)
+        let (stack, runner) = net::new(net_device, config, RESOURCES.init(StackResources::new()), seed);
+
+        spawner
+            .spawn(system_tasks::net(runner))
+            .expect("Spawning net_task failed.");
+        stack
     }
 
     /// Setup WIFI connection.
@@ -456,6 +289,201 @@ mod init {
             }
         }
     }
+
+    //// ---- System tasks for managing peripherals/debug. -------------------------
+    mod system_tasks {
+        use embassy_rp::gpio;
+
+        use super::*;
+
+        /// Interacts with the WIFI chip over some internal SPI.
+        #[embassy_executor::task]
+        pub(super) async fn cyw43(
+            runner: cyw43::Runner<'static, Output<'static>, PioSpi<'static, WifiPIO, 0, WifiDMA>>,
+        ) -> ! {
+            log::info!("System task cyw43 starting.");
+            runner.run().await
+        }
+
+        /// Manages the network stack (so I guess it handles connections, creating sockets and actually sending stuff over sockets).
+        #[embassy_executor::task]
+        pub(super) async fn net(mut runner: net::Runner<'static, cyw43::NetDriver<'static>>) -> ! {
+            log::info!("System task net starting.");
+            runner.run().await
+        }
+
+        /// Sets the global logger and sends log messages over USB.
+        #[embassy_executor::task]
+        pub(super) async fn logger(driver: Driver<'static, USB>) {
+            log::info!("System task logger starting.");
+            let level = env!("LOG_LEVEL").parse().unwrap_or(log::LevelFilter::Info);
+            embassy_usb_logger::run!(1024, level, driver);
+        }
+
+        #[embassy_executor::task]
+        pub(super) async fn resetter(mut button: gpio::Input<'static>) -> ! {
+            button.wait_for_low().await;
+            panic!("Restarting after restart button pressed.");
+        }
+    }
+}
+
+async fn handle_update<'a>(update: Update, protocol: &mut fetch_protocol::Socket<'_>) -> Result<()> {
+    log::info!("Received an update. Acquiring mutex to change message buffer.");
+    let mut guard = MESSAGES.lock().await;
+    let messages: &mut Messages = &mut guard;
+
+    match update.kind {
+        UpdateKind::Text(_) => {
+            log::info!("Requesting text update.");
+            let message = messages.next_available_text();
+            message.set_meta(&update);
+
+            // SAFETY - We read the bytes from the network into the next available text message.
+            // If that fails -- in which case the buffer could be half-filled -- or if the buffer does not contain valid UTF-8 in the end, we clear the string.
+            // We are holding the message lock so no one else can access the the unsafe buffer contents while this future may be paused.
+            unsafe {
+                let message_buf = message.data.text.as_mut_vec();
+                if let Err(e) = protocol.request_update(&update, message_buf).await {
+                    message_buf.clear();
+                    return Err(e);
+                }
+
+                match core::str::from_utf8(message_buf) {
+                    Ok(text) => {
+                        log::info!("Received text update: {}", text);
+                    }
+                    Err(e) => {
+                        message_buf.clear();
+                        return Err(Error::ServerMessage(ServerMessageError::Encoding(e)));
+                    }
+                }
+            }
+        }
+        UpdateKind::Image => {
+            log::info!("Requesting image update.");
+            let message = messages.next_available_image();
+            message.set_meta(&update);
+            let message_buf = message.data.image.as_mut();
+            protocol.request_update(&update, message_buf).await?;
+        }
+    };
+
+    Ok(())
+}
+
+//// ---- Main tasks to implement the device features. ------------------------
+mod main_tasks {
+    use super::*;
+
+    /// This task connects to the configured server and periodically fetches new messages to update the global [`MESSAGES`] object.
+    ///
+    /// - [`stack`]: The network stack. Used to create sockets.
+    /// - [`control`]: The driver of the WIFI chip. TODO usage not clear.
+    #[embassy_executor::task]
+    pub(super) async fn fetch_data(
+        mut state: fetch_protocol::State,
+        stack: net::Stack<'static>,
+        mut control: cyw43::Control<'static>,
+    ) {
+        // We save the id of the latest message we received to send to the server for the next update check.
+        let mut last_message_id = None;
+
+        loop {
+            log::info!("Creating new connection.");
+            let protocol = fetch_protocol::Socket::new(&mut state, stack, &mut control).await;
+            let mut protocol = match protocol {
+                Ok(protocol) => protocol,
+                Err(e) => {
+                    handle_error(e);
+                    Timer::after(SERVER_CONNECT_ERROR_WAIT).await;
+                    continue;
+                }
+            };
+
+            // We loop as long as we successfully receive new message updates. Every other case exits the loop.
+            // a.d. TODO move somewhere else
+            let update_result = loop {
+                log::info!("Checking for updates");
+                match protocol.check_update(last_message_id).await {
+                    Err(e) => {
+                        break Err(e);
+                    }
+                    Ok(CheckUpdateResult::NoUpdate) => {
+                        log::info!("No updates for now. Sleeping.");
+                        break Ok(());
+                    }
+                    Ok(CheckUpdateResult::Update(update)) => match handle_update(update, &mut protocol).await {
+                        Ok(()) => {
+                            last_message_id = Some(last_message_id.map_or(update.id, |last| cmp::max(last, update.id)));
+                        }
+                        Err(e) => break Err(e),
+                    },
+                }
+            };
+
+            protocol.abort().await;
+
+            if let Err(e) = update_result {
+                handle_error(e);
+            }
+            Timer::after(MESSAGE_FETCH_INTERVAL).await;
+        }
+    }
+
+    /// Periodically get the next messages from the global [`MESSAGES`] object and display it.
+    ///
+    /// - [`display`]: a driver to interact with the display's ST7735 chip.
+    #[embassy_executor::task]
+    pub(super) async fn display_messages(mut display: ST7735) {
+        let mut last_message_time = Instant::MIN;
+        let mut prio_message_opt: Option<TextData> = None;
+
+        // Each time the loop is entered we immediately display a priority message if we are currently holding one.
+        // Priority messages are shown for `PRIO_MESSAGE_DISPLAY_DURATION` or until a new priority message arrives.
+        // If there is no priority message we display the next non-priority message and then wait for `MESSAGE_DISPLAY_DURATION`
+        // or until a new priority message arrives.
+        loop {
+            log::info!("Check if priority message exists.");
+
+            if let Some(prio_message) = prio_message_opt.take() {
+                format_display_string(&prio_message.text, DisplayOptions::PriorityMessage, &mut display);
+
+                prio_message_opt = with_timeout(PRIO_MESSAGE_DISPLAY_DURATION, PRIO_MESSAGE_SIGNAL.wait())
+                    .await
+                    .ok();
+            } else {
+                log::info!("No priority message found. Acquiring mutex to read message buffer.");
+                let guard = MESSAGES.lock().await;
+                let messages: &Messages = &guard;
+                if let Some(next_message) = messages.next_display_message_generic(last_message_time) {
+                    last_message_time = next_message.meta.updated_at;
+
+                    match next_message.data {
+                        DisplayMessage::Text(data) => {
+                            log::info!("Showing a text message: {}", data.text.as_str());
+                            format_display_string(&data.text, DisplayOptions::NormalMessage, &mut display);
+                        }
+                        DisplayMessage::Image(data) => {
+                            log::info!("Showing an image message.");
+                            let raw: ImageRawBE<Rgb565> = ImageRaw::new(&data.image, IMAGE_WIDTH as u32);
+                            // a.d. unwrap() cannot panic since our display implementation has `Infallibe` as the error type.
+                            Image::new(&raw, Point::zero()).draw(&mut display.dev).unwrap();
+                        }
+                    }
+                } else {
+                    format_display_string("No messages :(", DisplayOptions::NormalMessage, &mut display);
+                }
+
+                // Note, must drop this before waiting below so that we do not hold the lock for too long.
+                drop(guard);
+
+                prio_message_opt = with_timeout(MESSAGE_DISPLAY_DURATION, PRIO_MESSAGE_SIGNAL.wait())
+                    .await
+                    .ok();
+            }
+        }
+    }
 }
 
 #[embassy_executor::main]
@@ -463,12 +491,8 @@ async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
     let protocol_state = fetch_protocol::State::take();
 
-    let usb_driver = init::usb(p.USB).await;
-    spawner
-        .spawn(system_tasks::logger(usb_driver))
-        .expect("Spawning logger_task failed.");
-    Timer::after(INIT_LOGGING_WAIT).await;
-
+    init::reset(spawner, p.PIN_1).await;
+    init::usb(spawner, p.USB).await;
     log::info!("Booting device with ID: 0x{:08x}", device_id());
 
     let display = init::display(p.PIN_6, p.PIN_7, p.PIN_8, p.PIN_9, p.SPI1, p.PIN_10, p.PIN_11).await;
@@ -477,10 +501,7 @@ async fn main(spawner: Spawner) {
         .expect("Spawning display_messages_task failed.");
     let (cyw43_driver, mut cyw43_control) =
         init::cyw43(spawner, p.PIN_23, p.PIN_25, p.PIO0, p.PIN_24, p.PIN_29, p.DMA_CH0).await;
-    let (net_stack, net_runner) = init::net(cyw43_driver).await;
-    spawner
-        .spawn(system_tasks::net(net_runner))
-        .expect("Spawning net_task failed.");
+    let net_stack = init::net(spawner, cyw43_driver).await;
 
     init::wifi(&mut cyw43_control).await;
     spawner
