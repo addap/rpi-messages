@@ -272,7 +272,7 @@ mod init {
         };
 
         log::info!("Connecting to Wifi '{}'.", wifi_ssid);
-        log::info!("With password '{:?}'", wifi_pw);
+        log::info!("With password '{}'", wifi_pw);
         // TODO no need to parse it anymore
 
         loop {

@@ -8,16 +8,22 @@ MEMORY {
 
 SECTIONS {
     .wifi_info : {
-        KEEP(*(.wifi_info))
-        *(.wifi_info);
+        KEEP(*(.wifi_info.*))
         . = ALIGN(4);
+        *(.wifi_info.ssid);
+        . = ALIGN(4);
+        *(.wifi_info.pw);
+        . = ALIGN(4);
+        *(.wifi_info.ip);
+        . = ALIGN(4);
+        *(.wifi_info.port);
     } > WIFI_INFO
 } INSERT AFTER .text;
 
 SECTIONS {
     .device_info : {
-        KEEP(*(.device_info))
-        *(.device_info);
+        KEEP(*(.device_info.*))
         . = ALIGN(4);
+        *(.device_info.id);
     } > DEVICE_INFO
 } INSERT AFTER .text;

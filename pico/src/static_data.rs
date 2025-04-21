@@ -23,34 +23,38 @@
 
 use core::ffi::CStr;
 
-use common::consts::{WIFI_PW_LEN, WIFI_SSID_LEN};
+use common::{
+    consts::{WIFI_PW_LEN, WIFI_SSID_LEN},
+    types::DeviceID,
+};
 use embassy_net::{IpAddress, IpEndpoint};
 
 #[used]
-#[link_section = ".device_info"]
-pub static mut DEVICE_ID: u32 = 0xcafebabe;
+#[link_section = ".device_info.id"]
+pub static DEVICE_ID: u32 = 0xcafebabe;
 
 #[used]
-#[link_section = ".wifi_info"]
-pub static mut WIFI_SSID_BYTES: [u8; WIFI_SSID_LEN] = *b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+#[link_section = ".wifi_info.ssid"]
+pub static WIFI_SSID_BYTES: [u8; WIFI_SSID_LEN] = *b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
 #[used]
-#[link_section = ".wifi_info"]
-pub static mut WIFI_PW_BYTES: [u8; WIFI_PW_LEN] =
+#[link_section = ".wifi_info.pw"]
+pub static WIFI_PW_BYTES: [u8; WIFI_PW_LEN] =
     *b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
 #[used]
-#[link_section = ".wifi_info"]
-pub static mut SERVER_IPV4_BYTES: [u8; 4] = [192, 168, 188, 69];
+#[link_section = ".wifi_info.ip"]
+pub static SERVER_IPV4_BYTES: [u8; 4] = [192, 168, 188, 69];
 #[used]
-#[link_section = ".wifi_info"]
-pub static mut SERVER_PORT: u16 = 1338;
+#[link_section = ".wifi_info.port"]
+pub static SERVER_PORT: u16 = 1338;
 
 #[inline(never)]
-pub fn device_id() -> u32 {
-    unsafe { DEVICE_ID }
+pub fn device_id() -> DeviceID {
+    let id = DEVICE_ID;
+    DeviceID(id)
 }
 
 pub fn wifi_ssid() -> Option<&'static str> {
-    let cstr = match CStr::from_bytes_until_nul(unsafe { &WIFI_SSID_BYTES }) {
+    let cstr = match CStr::from_bytes_until_nul(&WIFI_SSID_BYTES) {
         Ok(cstr) => cstr,
         Err(e) => {
             log::error!("Parsing Wifi SSID failed.\n{}", e);
@@ -67,7 +71,7 @@ pub fn wifi_ssid() -> Option<&'static str> {
 }
 
 pub fn wifi_password() -> Option<&'static str> {
-    let cstr = match CStr::from_bytes_until_nul(unsafe { &WIFI_PW_BYTES }) {
+    let cstr = match CStr::from_bytes_until_nul(&WIFI_PW_BYTES) {
         Ok(cstr) => cstr,
         Err(e) => {
             log::error!("Parsing Wifi password failed.\n{}", e);
@@ -84,11 +88,11 @@ pub fn wifi_password() -> Option<&'static str> {
 }
 
 pub fn server_endpoint() -> IpEndpoint {
-    let a0: u8 = unsafe { SERVER_IPV4_BYTES[0] };
-    let a1: u8 = unsafe { SERVER_IPV4_BYTES[1] };
-    let a2: u8 = unsafe { SERVER_IPV4_BYTES[2] };
-    let a3: u8 = unsafe { SERVER_IPV4_BYTES[3] };
-    let port = unsafe { SERVER_PORT };
+    let a0: u8 = SERVER_IPV4_BYTES[0];
+    let a1: u8 = SERVER_IPV4_BYTES[1];
+    let a2: u8 = SERVER_IPV4_BYTES[2];
+    let a3: u8 = SERVER_IPV4_BYTES[3];
+    let port = SERVER_PORT;
 
     IpEndpoint::new(IpAddress::v4(a0, a1, a2, a3), port)
 }
