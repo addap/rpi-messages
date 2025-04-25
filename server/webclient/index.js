@@ -1,3 +1,6 @@
+function error(msg) {
+  alert(`Error: ${msg}`);
+}
 
 function submitMultipart() {
   console.log("Calling event listener of mp submit");
@@ -9,16 +12,28 @@ function submitMultipart() {
   const durationIpt = document.getElementById("mp-duration");
 
   // const formData = new FormData();
+  if (!fileIpt.files || !fileIpt.files[0]) {
+    return error("No input file.");
+  }
   const file = fileIpt.files[0];
   formData.append("image", file);
+  if (!receiverIpt.value) {
+    return error("No receiver id.");
+  }
   formData.append("receiver", receiverIpt.value);
+  if (!durationIpt.value) {
+    return error("No duration.");
+  }
   formData.append("duration", durationIpt.value * 60 * 60);
 
   const xhr = new XMLHttpRequest();
-  xhr.open("POST", "/mp_new_image_message", true);
+  xhr.open("POST", "new_image_message", true);
 
   xhr.onload = () => {
     console.log("Finished sending form data.");
+  }
+  xhr.onerror = (e) => {
+    error(e);
   }
   xhr.send(formData);
 }
