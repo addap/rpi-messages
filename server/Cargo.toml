@@ -9,7 +9,7 @@ edition = "2021"
 common = { path = "../common", package = "rpi-messages-common", features = [ "web", "pico" ] }
 serde = { version = "1.0" }
 anyhow = { version = "1.0" }
-axum = { version = "0.8", features = [ "macros", "multipart" ] }
+axum = { version = "0.8", features = ["macros", "multipart", "original-uri"] }
 chrono = { version = "0.4", features = [ "serde" ] }
 image = { version = "0.25" }
 rgb565 = { version = "0.1" }
@@ -19,5 +19,5 @@ log = { version = "0.4" }
 env_logger = { version = "0.11" }
 thiserror = { version = "2.0" }
 tower = { version = "0.5" }
-tower-http = { version = "0.6", features = ["fs", "normalize-path", "trace"] }
+tower-http = { version = "0.6", features = ["fs", "normalize-path", "redirect", "trace"] }
 bytes = "1.10.1"

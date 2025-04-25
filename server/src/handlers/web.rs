@@ -7,16 +7,16 @@ use std::{
 
 use anyhow::{anyhow, Context};
 use axum::{
-    extract::{DefaultBodyLimit, Multipart, Path, Query, Request, State},
+    extract::{DefaultBodyLimit, Multipart, OriginalUri, Path, Query, Request, State},
     http::header,
-    response::{IntoResponse, Response},
+    response::{self, IntoResponse, Response},
     routing::{get, post},
     Form, Json, Router, ServiceExt,
 };
 use bytes::Bytes;
 use chrono::Utc;
 use common::{
-    protocols::web::{MessageMeta, NewImageMessage, NewMessageCreated, NewTextMessage},
+    protocols::web::{MessageMeta, NewMessageCreated, NewTextMessage},
     types::{DeviceID, UpdateID},
 };
 use serde::{de, Deserialize, Deserializer};
@@ -55,29 +55,29 @@ async fn new_text_message(
     Ok(Json(()))
 }
 
+// #[axum::debug_handler]
+// async fn new_image_message(
+//     State(messages): State<Arc<Mutex<Messages>>>,
+//     Form(new_message): Form<NewImageMessage>,
+// ) -> WebResult<Json<()>> {
+//     log::info!("urlencode handler");
+//     let image = image_from_bytes_mime(&new_message.image, new_message.mime).context("parsing image failed")?;
+//     let mut guard = messages.lock().await;
+//     let new_message_content = MessageContent::new_image(image)?;
+//     let new_message = Message::new(
+//         guard.next_id(),
+//         new_message.meta,
+//         SenderID::Web,
+//         Utc::now(),
+//         new_message_content,
+//     );
+
+//     guard.add_message(new_message);
+//     Ok(Json(()))
+// }
+
 #[axum::debug_handler]
 async fn new_image_message(
-    State(messages): State<Arc<Mutex<Messages>>>,
-    Form(new_message): Form<NewImageMessage>,
-) -> WebResult<Json<()>> {
-    log::info!("urlencode handler");
-    let image = image_from_bytes_mime(&new_message.image, new_message.mime).context("parsing image failed")?;
-    let mut guard = messages.lock().await;
-    let new_message_content = MessageContent::new_image(image)?;
-    let new_message = Message::new(
-        guard.next_id(),
-        new_message.meta,
-        SenderID::Web,
-        Utc::now(),
-        new_message_content,
-    );
-
-    guard.add_message(new_message);
-    Ok(Json(()))
-}
-
-#[axum::debug_handler]
-async fn mp_new_image_message(
     State(messages): State<Arc<Mutex<Messages>>>,
     mut multipart: Multipart,
 ) -> WebResult<Json<NewMessageCreated>> {
@@ -186,20 +186,40 @@ async fn latest_message(
 }
 
 pub async fn run(messages: Arc<Mutex<Messages>>) {
+    let web_client = {
+        let index_html = ServeFile::new(INDEX_PATH);
+        let index_js = ServeFile::new(INDEX_JS_PATH);
+
+        Router::new()
+            .route(
+                "/",
+                get(|OriginalUri(original_uri): OriginalUri| async move {
+                    let path = format!("{}/index.html", original_uri.path());
+                    response::Redirect::temporary(&path)
+                }),
+            )
+            // .route_service("/", Redirect::temporary(Uri::from_static(src)))
+            .route_service("/index.html", index_html)
+            .route_service("/index.js", index_js)
+    };
+
+    let api = {
+        Router::new()
+            .route("/latest/{for_device}", get(latest_message))
+            .route("/new_text_message", post(new_text_message))
+            // .route("/new_image_message", post(new_image_message))
+            .route(
+                "/new_image_message",
+                post(new_image_message).layer(DefaultBodyLimit::max(UPLOAD_BODY_LIMIT)),
+            )
+            .route("/submit_wifi_config", post(submit_wifi_config))
+            .with_state(messages)
+    };
     let router = Router::new()
-        .route_service("/", ServeFile::new(INDEX_PATH))
-        .route_service("/index.html", ServeFile::new(INDEX_PATH))
-        .route_service("/index.js", ServeFile::new(INDEX_JS_PATH))
-        .route("/new_text_message", post(new_text_message))
-        .route("/new_image_message", post(new_image_message))
-        .route(
-            "/mp_new_image_message",
-            post(mp_new_image_message).layer(DefaultBodyLimit::max(UPLOAD_BODY_LIMIT)),
-        )
-        .route("/latest/{for_device}", get(latest_message))
-        .with_state(messages)
-        .route("/submit_wifi_config", post(submit_wifi_config))
+        .nest("/web", web_client)
+        .nest("/api", api)
         .layer(TraceLayer::new_for_http());
+
     // Router layers (i.e. middleware) cannot rewrite the request. So to strip of a trailing slash we must
     // first pass through this layer before entering the router.
     let app = NormalizePathLayer::trim_trailing_slash().layer(router);
