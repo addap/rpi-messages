@@ -84,20 +84,19 @@ impl<'a> Socket<'a> {
     }
 
     pub async fn abort(mut self) {
-        self.socket.abort();
+        self.socket.close();
         self.socket.flush().await.ok();
     }
 
     pub async fn check_update(&mut self, after: Option<UpdateID>) -> Result<CheckUpdateResult> {
         let command = ClientCommand::CheckUpdate(device_id(), after);
 
-        // TODO make static buffer
         let mut command_buf = [0u8; ClientCommand::BUFFER_SIZE];
         let command_buf = command.to_bytes(&mut command_buf)?;
 
         log::info!("Check Update command buf {command_buf:?}");
 
-        self.socket.write(&command_buf).await.map_err(|_| Error::Socket)?;
+        self.socket.write_all(&command_buf).await.map_err(|_| Error::Socket)?;
 
         let mut reply_buf = [0u8; CheckUpdateResult::BUFFER_SIZE];
         self.socket
@@ -110,28 +109,29 @@ impl<'a> Socket<'a> {
         let result = CheckUpdateResult::from_bytes(&reply_buf)?;
         let valid = result
             .check_valid()
-            .map_err(|e| Error::ServerMessage(ServerMessageError::Format(e)));
+            .map_err(|e| Error::ServerMessage(ServerMessageError::Protocol(e)));
 
         log::info!("CheckUpdateResult {result:?}");
         valid.and(Ok(result))
     }
 
     pub async fn request_update(&mut self, update: &Update, message_buf: &mut [u8]) -> Result<()> {
-        assert!(message_buf.len() >= update.kind.size());
+        assert!(
+            message_buf.len() == update.kind.size(),
+            "Message buf length is {} <> {}, for update kind {:?}",
+            message_buf.len(),
+            update.kind.size(),
+            update.kind
+        );
 
         let command = ClientCommand::RequestUpdate(update.id);
         // a.d. TODO try to use MaybeUninit
         let mut command_buf = [0u8; ClientCommand::BUFFER_SIZE];
         let command_buf = command.to_bytes(&mut command_buf)?;
-
         log::info!("Request Update command buf {command_buf:?}");
 
         self.socket.write_all(&command_buf).await.map_err(|_| Error::Socket)?;
-
-        self.socket
-            .read_exact(&mut message_buf[..update.kind.size()])
-            .await
-            .map_err(|_| Error::Socket)?;
+        self.socket.read_exact(message_buf).await.map_err(|_| Error::Socket)?;
         Ok(())
     }
 }

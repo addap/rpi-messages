@@ -6,6 +6,7 @@ target = "thumbv6m-none-eabi"        # Cortex-M0 and Cortex-M0+
 
 [target.thumbv6m-none-eabi]
 runner = "elf2uf2-rs -d"
+#runner = 'probe-rs run --chip RP235x --verify --protocol swd'
 
 [env]
 #DEFMT_LOG = "debug"

@@ -68,6 +68,7 @@ const MESSAGE_TEXT_STYLE: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&MESSAG
 const MESSAGE_FETCH_INTERVAL: Duration = Duration::from_secs(60);
 const SERVER_CONNECT_ERROR_WAIT: Duration = Duration::from_secs(2);
 
+// a.d. TODO is a can we drop down to a Noop mutex? depends on if we access messages from difference executors.
 /// Global variable to hold message data retrieved from server. No persistence across reboots.
 /// We need the async mutex because we want to do an async read call inside a critical section.
 static MESSAGES: Mutex<CriticalSectionRawMutex, Messages> = Mutex::new(Messages::new());
@@ -339,11 +340,12 @@ async fn handle_update<'a>(update: Update, protocol: &mut fetch_protocol::Socket
             let message = messages.next_available_text();
             message.set_meta(&update);
 
-            // SAFETY - We read the bytes from the network into the next available text message.
-            // If that fails -- in which case the buffer could be half-filled -- or if the buffer does not contain valid UTF-8 in the end, we clear the string.
+            // SAFETY - We read the bytes from the network into message.data.text.
+            // If that fails (in which case the buffer could be half-filled) or if the buffer does not contain valid UTF-8 in the end, we clear the string.
             // We are holding the message lock so no one else can access the the unsafe buffer contents while this future may be paused.
             unsafe {
                 let message_buf = message.data.text.as_mut_vec();
+                message_buf.set_len(update.kind.size());
                 if let Err(e) = protocol.request_update(&update, message_buf).await {
                     message_buf.clear();
                     return Err(e);

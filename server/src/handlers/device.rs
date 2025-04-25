@@ -19,49 +19,62 @@ pub async fn run(messages: Arc<Mutex<Messages>>) {
     loop {
         println!("Listening for client connections.");
         match listener.accept().await {
-            Ok((mut socket, addr)) => {
+            Ok((socket, addr)) => {
                 println!("new client at {:?}", addr);
+                handle_client(socket, &messages).await
+            }
+            Err(e) => println!("couldn't get client: {e:?}"),
+        }
+    }
+}
 
-                'client: loop {
-                    match parse_client_command(&mut socket).await {
-                        Err(e) => {
-                            log::error!("{e}");
-                            break 'client;
-                        }
-                        Ok(ClientCommand::CheckUpdate(device_id, after)) => {
-                            let guard = messages.lock().await;
-                            let result = match guard.get_next_message(device_id, after) {
-                                Some(message) => {
-                                    let message_update = Update {
-                                        lifetime_sec: message.meta.duration.num_seconds() as u32,
-                                        id: message.id,
-                                        kind: UpdateKind::from(&message.content),
-                                    };
-                                    CheckUpdateResult::Update(message_update)
-                                }
-                                None => CheckUpdateResult::NoUpdate,
-                            };
+async fn handle_client(mut socket: TcpStream, messages: &Mutex<Messages>) {
+    'client: loop {
+        match parse_client_command(&mut socket).await {
+            Err(e) => {
+                log::error!("{e}");
+                break 'client;
+            }
+            Ok(ClientCommand::CheckUpdate(device_id, after)) => {
+                log::info!("CheckUpdate acquiring lock.");
+                let guard = messages.lock().await;
+                let result = match guard.get_next_message(device_id, after) {
+                    Some(message) => {
+                        let message_update = Update {
+                            lifetime_sec: message.meta.duration.num_seconds() as u32,
+                            id: message.id,
+                            kind: UpdateKind::from(&message.content),
+                        };
+                        CheckUpdateResult::Update(message_update)
+                    }
+                    None => CheckUpdateResult::NoUpdate,
+                };
 
-                            let buf = result.to_bytes_alloc().unwrap();
-                            log::info!("CheckUpdate result {result:?}, buf {buf:?}");
-                            socket.write_all(&buf).await.unwrap();
-                        }
-                        Ok(ClientCommand::RequestUpdate(id)) => {
-                            let guard = messages.lock().await;
-                            let message = guard.get_message(id).expect("Requested message not found.");
-                            match &message.content {
-                                MessageContent::Text(text) => {
-                                    socket.write_all(text.as_bytes()).await.unwrap();
-                                }
-                                MessageContent::Image { rgb565, .. } => {
-                                    socket.write_all(rgb565.as_slice()).await.unwrap();
-                                }
-                            }
-                        }
+                log::debug!("CheckUpdate result {result:?}");
+                let buf = result.to_bytes_alloc().unwrap();
+                log::debug!("CheckUpdate buf {buf:?}");
+                socket.write_all(&buf).await.unwrap();
+                match result {
+                    CheckUpdateResult::NoUpdate => {
+                        socket.flush().await.ok();
+                        break 'client;
+                    }
+                    _ => {}
+                }
+            }
+            Ok(ClientCommand::RequestUpdate(id)) => {
+                log::info!("RequestUpdate acquiring lock.");
+                let guard = messages.lock().await;
+                let message = guard.get_message(id).expect("Requested message not found.");
+                match &message.content {
+                    MessageContent::Text(text) => {
+                        socket.write_all(text.as_bytes()).await.unwrap();
+                    }
+                    MessageContent::Image { rgb565, .. } => {
+                        socket.write_all(rgb565.as_slice()).await.unwrap();
                     }
                 }
             }
-            Err(e) => println!("couldn't get client: {e:?}"),
         }
     }
 }
@@ -70,6 +83,7 @@ async fn parse_client_command(socket: &mut TcpStream) -> Result<ClientCommand, a
     let mut command_buf = [0u8; ClientCommand::BUFFER_SIZE];
     socket.read_exact(&mut command_buf).await?;
     let result = ClientCommand::from_bytes(&command_buf);
+
     log::info!(
         "Received ClientCommand buf {command_buf:?}. Parsed...{}",
         match result {

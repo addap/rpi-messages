@@ -24,12 +24,17 @@ impl From<postcard::Error> for Error {
     }
 }
 
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Error {
+    pub fn fmt<W: fmt::Write>(&self, f: &mut W) -> fmt::Result {
         match self {
             Error::Length(length, max) => write!(f, "Length is {length} but max is {max}."),
             Error::Postcard(error) => write!(f, "Serialization error: {}", error),
         }
+    }
+}
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Error::fmt(self, f)
     }
 }
 
@@ -91,41 +96,28 @@ pub mod serialization {
 
     use super::*;
 
-    type Length = u16;
-
     pub trait SerDe: Serialize + DeserializeOwned + MaxSize {
-        const LENGTH_FIELD: usize = size_of::<Length>();
-        const BUFFER_SIZE: usize = Self::LENGTH_FIELD + Self::POSTCARD_MAX_SIZE;
-        // Statically that the POSTCARD_MAX_SIZE constant can be encoded in the length field of our messages.
-        const _ASSERT_LENGTH_REPRESENTABLE: () = assert!(Self::POSTCARD_MAX_SIZE <= Length::MAX as usize);
+        const BUFFER_SIZE: usize = Self::POSTCARD_MAX_SIZE;
 
         // a.d. TODO remove maybe
         #[cfg(feature = "std")]
         fn to_bytes_alloc(&self) -> Result<Vec<u8>, Error> {
             let mut buf = vec![0; Self::BUFFER_SIZE];
-            let result = self.to_bytes(buf.as_mut_slice())?;
-            let len = result.len();
-            buf.truncate(len);
+            self.to_bytes(buf.as_mut_slice())?;
             Ok(buf)
         }
 
         fn to_bytes<'a, 'b>(&'a self, buf: &'b mut [u8]) -> Result<&'b mut [u8], Error> {
             // We cannot use Self in the const generic of the slice type, so we check the length requirement here at runtime.
-            // There is an unstable option for complex generic const expressions but I'd wait until it's stabilized https://github.com/rust-lang/rust/issues/76560
+            // TODO There is an unstable option for complex generic const expressions but I'd wait until it's stabilized https://github.com/rust-lang/rust/issues/76560
             assert!(buf.len() == Self::BUFFER_SIZE);
-
-            let result = postcard::to_slice(self, &mut buf[Self::LENGTH_FIELD..])?;
-            let len = result.len() as Length;
-            buf[..Self::LENGTH_FIELD].copy_from_slice(&len.to_be_bytes());
-            Ok(&mut buf[..(Self::LENGTH_FIELD + len as usize)])
+            postcard::to_slice(self, buf)?;
+            Ok(buf)
         }
 
         fn from_bytes(buf: &[u8]) -> Result<Self, Error> {
             assert!(buf.len() == Self::BUFFER_SIZE);
-
-            let len = Length::from_be_bytes([buf[0], buf[1]]) as usize;
-            let result = postcard::from_bytes(&buf[Self::LENGTH_FIELD..(Self::LENGTH_FIELD + len)])?;
-
+            let result = postcard::from_bytes(buf)?;
             Ok(result)
         }
     }
