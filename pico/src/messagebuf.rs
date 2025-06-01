@@ -1,21 +1,12 @@
 use core::borrow::Borrow;
 
 use common::{
-    consts::{IMAGE_BUFFER_SIZE, IMAGE_HEIGHT, IMAGE_WIDTH, TEXT_BUFFER_SIZE},
+    consts::{IMAGE_BUFFER_SIZE, TEXT_BUFFER_SIZE},
     protocols::pico::Update,
 };
 use embassy_time::{Duration, Instant};
-use embedded_graphics::{draw_target::DrawTarget, pixelcolor::Rgb565, prelude::*, primitives::Rectangle};
-use embedded_text::{
-    alignment::HorizontalAlignment,
-    style::{HeightMode, TextBoxStyleBuilder, VerticalOverdraw},
-    TextBox,
-};
 use heapless::String;
 
-use crate::{MESSAGE_BG_COLOR, MESSAGE_TEXT_STYLE, PRIO_MESSAGE_BG_COLOR, ST7735};
-
-/// With margins we are able to fit 14 * 5 characters on one screen.
 /// a.d. TODO we could also do paging for longer messages, since we already need to infer linebreaks anyways.
 const TEXT_MESSAGE_NUM: usize = 10;
 const IMAGE_MESSAGE_NUM: usize = 2;
@@ -69,16 +60,6 @@ pub struct MessageMeta {
     pub updated_at: Instant,
 }
 
-/// An earlier design used Message<T> where T: MessageType
-/// but I wanted to have new be a const fn which is not allowed in traits, so we specialize the two types of messages.
-pub struct Message<T>
-where
-    T: MessageData,
-{
-    pub data: T,
-    pub meta: MessageMeta,
-}
-
 impl MessageMeta {
     const fn new() -> Self {
         Self {
@@ -93,7 +74,24 @@ impl MessageMeta {
     }
 }
 
-impl Message<TextData> {
+/// An earlier design used Message<T> where T: MessageType
+/// but I wanted to have new be a const fn which is not allowed in traits, so we specialize the two types of messages.
+pub struct Message<T> {
+    pub data: T,
+    pub meta: MessageMeta,
+}
+
+impl<T> Message<T> {
+    pub fn update_meta(&mut self, update: &Update) {
+        self.meta.updated_at = Instant::now();
+        self.meta.lifetime = Duration::from_secs(update.lifetime_sec.into());
+    }
+}
+
+type TextMessage = Message<TextData>;
+type ImageMessage = Message<ImageData>;
+
+impl TextMessage {
     const fn new() -> Self {
         Self {
             data: TextData::new(),
@@ -102,7 +100,7 @@ impl Message<TextData> {
     }
 }
 
-impl Message<ImageData> {
+impl ImageMessage {
     const fn new() -> Self {
         Self {
             data: ImageData::new(),
@@ -111,39 +109,29 @@ impl Message<ImageData> {
     }
 }
 
-impl<T> Message<T>
-where
-    T: MessageData,
-{
-    pub fn set_meta(&mut self, update: &Update) {
-        self.meta.updated_at = Instant::now();
-        self.meta.lifetime = Duration::from_secs(update.lifetime_sec.into());
-    }
-}
-
-pub enum DisplayMessage<'a> {
+pub enum DisplayMessageData<'a> {
     Text(&'a TextData),
     Image(&'a ImageData),
 }
 
-pub struct GenericDisplayMessage<'a> {
-    pub data: DisplayMessage<'a>,
+pub struct DisplayMessage<'a> {
+    pub data: DisplayMessageData<'a>,
     pub meta: MessageMeta,
 }
 
-impl<'a> From<&'a Message<TextData>> for GenericDisplayMessage<'a> {
-    fn from(value: &'a Message<TextData>) -> Self {
+impl<'a> From<&'a TextMessage> for DisplayMessage<'a> {
+    fn from(value: &'a TextMessage) -> Self {
         Self {
-            data: DisplayMessage::Text(&value.data),
+            data: DisplayMessageData::Text(&value.data),
             meta: value.meta,
         }
     }
 }
 
-impl<'a> From<&'a Message<ImageData>> for GenericDisplayMessage<'a> {
-    fn from(value: &'a Message<ImageData>) -> Self {
+impl<'a> From<&'a ImageMessage> for DisplayMessage<'a> {
+    fn from(value: &'a ImageMessage) -> Self {
         Self {
-            data: DisplayMessage::Image(&value.data),
+            data: DisplayMessageData::Image(&value.data),
             meta: value.meta,
         }
     }
@@ -160,34 +148,33 @@ pub struct Messages {
 
 impl Messages {
     pub const fn new() -> Self {
-        // TODO can we use macros to make this easier if we have more messages?
         Self {
             texts: [
-                Message::<TextData>::new(),
-                Message::<TextData>::new(),
-                Message::<TextData>::new(),
-                Message::<TextData>::new(),
-                Message::<TextData>::new(),
-                Message::<TextData>::new(),
-                Message::<TextData>::new(),
-                Message::<TextData>::new(),
-                Message::<TextData>::new(),
-                Message::<TextData>::new(),
+                TextMessage::new(),
+                TextMessage::new(),
+                TextMessage::new(),
+                TextMessage::new(),
+                TextMessage::new(),
+                TextMessage::new(),
+                TextMessage::new(),
+                TextMessage::new(),
+                TextMessage::new(),
+                TextMessage::new(),
             ],
-            images: [Message::<ImageData>::new(), Message::<ImageData>::new()],
+            images: [ImageMessage::new(), ImageMessage::new()],
         }
     }
 
-    /// Get a pointer to either a `Message<TextData>` or `Message<ImageData>` to display.
+    /// Get a pointer to either a `TextMessage` or `ImageMessage` to display.
     /// a.d. TODO fix
     /// - `last_message`: the last message that was displayed. If `None`, it this function returns the oldest active message.
     ///   If `Some(m)` it returns the oldest active message newer than `m`.
-    pub fn next_display_message_generic(&self, last_message_time: Instant) -> Option<GenericDisplayMessage<'_>> {
+    pub fn next_display_message_generic(&self, last_message_time: Instant) -> Option<DisplayMessage<'_>> {
         let messages = self
             .texts
             .iter()
-            .map(|text| GenericDisplayMessage::from(text))
-            .chain(self.images.iter().map(|image| GenericDisplayMessage::from(image)));
+            .map(|text| DisplayMessage::from(text))
+            .chain(self.images.iter().map(|image| DisplayMessage::from(image)));
 
         let latest_message = messages
             .clone()
@@ -195,19 +182,19 @@ impl Messages {
             .min_by_key(|m| m.meta.updated_at);
 
         if latest_message.is_some() {
-            log::debug!("ndm: Found active message that is newer than last_message_time.");
+            log::debug!("Found active message that is newer than last_message_time.");
             latest_message
         } else {
-            log::debug!("ndm: Found no new active messages, wrapping around to oldest.");
+            log::debug!("Found no new active messages, wrapping around to oldest.");
             let earliest_message = messages
                 .filter(|m| m.meta.is_active())
                 .min_by_key(|m| m.meta.updated_at);
 
             if earliest_message.is_some() {
-                log::debug!("ndm: Found oldest active message.");
+                log::debug!("Found oldest active message.");
                 earliest_message
             } else {
-                log::debug!("ndm: Found no active messages at all.");
+                log::debug!("Found no active messages at all.");
                 None
             }
         }
@@ -234,66 +221,26 @@ impl Messages {
         // We first check if there is any message that is currently not active, then we can just use that.
         // Otherwise we return the oldest active message, to be overwritten.
         if let Some(inactive_index) = messages.iter_mut().position(|message| !message.meta.is_active()) {
-            // a.d. unwrap() cannot fail since `inactive_index` is a valid index.
+            // PANIC: unwrap cannot fail since `inactive_index` is a valid index.
             messages.get_mut(inactive_index).unwrap()
         } else {
-            // a.d. unwrap() cannot fail since messages is non-empty.
+            // PANIC: unwrap cannot fail since messages is non-empty.
             messages
                 .iter_mut()
                 .min_by_key(|message| message.meta.updated_at)
                 .unwrap()
         }
 
-        // We use an index since the uncommented version below did not work because returning the pointer
+        // We use an index since the commented version below did not work because returning the pointer
         // makes the first iter_mut live for 'a, i.e. the whole function body so we cannot call iter_mut again.
         // I would have thought with NLL this already works but maybe it needs the more fine grained analysis of Polonius.
-        // if let Some(message) = messages.iter_mut().find(|message| !message.is_active()) {
+        // if let Some(message) = messages.iter_mut().find(|message| !message.meta.is_active()) {
         //     return message;
         // } else {
-        //     messages.iter_mut().min_by_key(|message| message.updated_at).unwrap()
+        //     messages
+        //         .iter_mut()
+        //         .min_by_key(|message| message.meta.updated_at)
+        //         .unwrap()
         // }
     }
-}
-
-#[derive(Clone, Copy)]
-pub enum DisplayOptions {
-    PriorityMessage,
-    NormalMessage,
-}
-
-impl DisplayOptions {
-    fn clear_style(self) -> Rgb565 {
-        match self {
-            DisplayOptions::PriorityMessage => PRIO_MESSAGE_BG_COLOR,
-            DisplayOptions::NormalMessage => MESSAGE_BG_COLOR,
-        }
-    }
-}
-
-pub fn format_display_string(text: &str, options: DisplayOptions, display: &mut ST7735) {
-    const HORIZONTAL_MARGIN: i32 = 4;
-    const VERTICAL_MARGIN: i32 = 6;
-
-    let textbox_style = TextBoxStyleBuilder::new()
-        .height_mode(HeightMode::Exact(VerticalOverdraw::Visible))
-        .alignment(HorizontalAlignment::Center)
-        .vertical_alignment(embedded_text::alignment::VerticalAlignment::Middle)
-        .build();
-
-    let bounds = Rectangle::new(
-        Point::new(HORIZONTAL_MARGIN, VERTICAL_MARGIN),
-        Size::new(
-            // + 1 since margins are not symmatric in the 9x15 font size
-            IMAGE_WIDTH as u32 - HORIZONTAL_MARGIN as u32 + 1,
-            IMAGE_HEIGHT as u32 - VERTICAL_MARGIN as u32 + 1,
-        ),
-    );
-
-    // Create the text box and apply styling options.
-    let text_box = TextBox::with_textbox_style(text, bounds, MESSAGE_TEXT_STYLE, textbox_style);
-
-    // Draw the text box.
-    // a.d. unwrap() cannot panic since our display implementation has `Infallibe` as the error type.
-    display.dev.clear(options.clear_style()).unwrap();
-    text_box.draw(&mut display.dev).unwrap();
 }

@@ -19,11 +19,11 @@ cortex-m = "0.7.7"
 rp2040-panic-usb-boot = "0.6.0"
 
 # Embassy crates
-cyw43 = { version = "0.3.0", features = [ "firmware-logs", "log" ] }
+cyw43 = { version = "0.3.0", features = ["firmware-logs", "log"] }
 cyw43-pio = { version = "0.3.0", features = [] }
 embassy-rp = { version = "0.3.1", features = ["rp2040", "critical-section-impl", "time-driver"] }
 embassy-executor = { version = "0.7.0", features = ["nightly", "arch-cortex-m", "executor-thread", "executor-interrupt"] }
-embassy-net = { version = "0.6.0", features = ["tcp", "udp", "dhcpv4" ] }
+embassy-net = { version = "0.6.0", features = ["tcp", "udp", "dhcpv4"] }
 # TODO check if defmt feature is enabled by something else
 embassy-sync = { version = "0.6.2" }
 embassy-usb-logger = { version = "0.4.0" }

@@ -17,7 +17,7 @@ use bytes::Bytes;
 use chrono::Utc;
 use common::{
     protocols::web::{MessageMeta, NewMessageCreated, NewTextMessage},
-    types::{DeviceID, UpdateID},
+    types::{DeviceID, MessageID},
 };
 use serde::{de, Deserialize, Deserializer};
 use tokio::sync::Mutex;
@@ -142,7 +142,7 @@ async fn new_image_message(
 #[derive(Debug, Deserialize)]
 struct LatestQueryParams {
     #[serde(default, deserialize_with = "empty_string_as_none")]
-    after: Option<UpdateID>,
+    after: Option<MessageID>,
 }
 
 /// Serde deserialization decorator to map empty Strings to None,
@@ -173,11 +173,11 @@ async fn latest_message(
         Some(Message {
             content: MessageContent::Text(text),
             ..
-        }) => Ok(text.to_owned().into_response()),
+        }) => Ok(([(header::CONTENT_TYPE, "text/plain")], text.text().to_owned()).into_response()),
         Some(Message {
-            content: MessageContent::Image { png, .. },
+            content: MessageContent::Image(image),
             ..
-        }) => Ok(([(header::CONTENT_TYPE, "image/png")], png.clone()).into_response()),
+        }) => Ok(([(header::CONTENT_TYPE, "image/png")], image.png().to_owned()).into_response()),
         _ => Err(AppError::not_found(&format!(
             "Latest message for {:#010X}",
             receiver_id

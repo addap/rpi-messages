@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::types::{DeviceID, UpdateID};
+use crate::types::{DeviceID, MessageID};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct MessageMeta {
@@ -23,5 +23,5 @@ pub struct NewImageMessage {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NewMessageCreated {
-    pub id: UpdateID,
+    pub id: MessageID,
 }

@@ -4,6 +4,11 @@ use core::{fmt, num::ParseIntError, str::FromStr};
 use postcard::experimental::max_size::MaxSize;
 use serde::{Deserialize, Serialize};
 
+use crate::consts;
+
+pub type TextLength = u8;
+const _: () = assert!(consts::TEXT_BUFFER_SIZE <= TextLength::MAX as usize);
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(feature = "postcard", derive(MaxSize))]
 #[serde(transparent)]
@@ -14,7 +19,7 @@ pub struct DeviceID(pub u32);
 #[serde(transparent)]
 #[repr(transparent)]
 
-pub struct UpdateID(pub u32);
+pub struct MessageID(pub u32);
 
 impl FromStr for DeviceID {
     type Err = ParseIntError;
@@ -26,11 +31,11 @@ impl FromStr for DeviceID {
     }
 }
 
-impl FromStr for UpdateID {
+impl FromStr for MessageID {
     type Err = ParseIntError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        u32::from_str(s).map(|id| UpdateID(id))
+        u32::from_str(s).map(|id| MessageID(id))
     }
 }
 

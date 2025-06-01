@@ -1,10 +1,9 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
-use anyhow::Context;
-use common::protocols::pico::serialization::SerDe;
-use common::protocols::pico::{CheckUpdateResult, ClientCommand, Update, UpdateKind};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use common::protocols::pico::serialization::Transmission;
+use common::protocols::pico::{ClientCommand, RequestUpdateResult, Update, UpdateKind};
+use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 
@@ -29,67 +28,43 @@ pub async fn run(messages: Arc<Mutex<Messages>>) {
 }
 
 async fn handle_client(mut socket: TcpStream, messages: &Mutex<Messages>) {
-    'client: loop {
-        match parse_client_command(&mut socket).await {
+    loop {
+        match ClientCommand::receive_alloc(&mut socket).await {
             Err(e) => {
                 log::error!("{e}");
-                break 'client;
+                break;
             }
-            Ok(ClientCommand::CheckUpdate(device_id, after)) => {
-                log::info!("CheckUpdate acquiring lock.");
+            Ok(ClientCommand::RequestUpdate(device_id, after)) => {
+                log::trace!("RequestUpdate acquiring lock.");
+
                 let guard = messages.lock().await;
-                let result = match guard.get_next_message(device_id, after) {
+                match guard.get_next_message(device_id, after) {
                     Some(message) => {
                         let message_update = Update {
                             lifetime_sec: message.meta.duration.num_seconds() as u32,
                             id: message.id,
                             kind: UpdateKind::from(&message.content),
                         };
-                        CheckUpdateResult::Update(message_update)
-                    }
-                    None => CheckUpdateResult::NoUpdate,
-                };
+                        let result = RequestUpdateResult::Update(message_update);
+                        result.send_alloc(&mut socket).await.unwrap();
 
-                log::debug!("CheckUpdate result {result:?}");
-                let buf = result.to_bytes_alloc().unwrap();
-                log::debug!("CheckUpdate buf {buf:?}");
-                socket.write_all(&buf).await.unwrap();
-                match result {
-                    CheckUpdateResult::NoUpdate => {
+                        match &message.content {
+                            MessageContent::Text(text) => {
+                                socket.write_all(text.text().as_bytes()).await.unwrap();
+                            }
+                            MessageContent::Image(image) => {
+                                socket.write_all(image.rgb565()).await.unwrap();
+                            }
+                        }
+                    }
+                    None => {
+                        let result = RequestUpdateResult::NoUpdate;
+                        result.send_alloc(&mut socket).await.unwrap();
                         socket.flush().await.ok();
-                        break 'client;
+                        break;
                     }
-                    _ => {}
-                }
-            }
-            Ok(ClientCommand::RequestUpdate(id)) => {
-                log::info!("RequestUpdate acquiring lock.");
-                let guard = messages.lock().await;
-                let message = guard.get_message(id).expect("Requested message not found.");
-                match &message.content {
-                    MessageContent::Text(text) => {
-                        socket.write_all(text.as_bytes()).await.unwrap();
-                    }
-                    MessageContent::Image { rgb565, .. } => {
-                        socket.write_all(rgb565.as_slice()).await.unwrap();
-                    }
-                }
+                };
             }
         }
     }
-}
-
-async fn parse_client_command(socket: &mut TcpStream) -> Result<ClientCommand, anyhow::Error> {
-    let mut command_buf = [0u8; ClientCommand::BUFFER_SIZE];
-    socket.read_exact(&mut command_buf).await?;
-    let result = ClientCommand::from_bytes(&command_buf);
-
-    log::info!(
-        "Received ClientCommand buf {command_buf:?}. Parsed...{}",
-        match result {
-            Ok(_) => "ok",
-            Err(_) => "failed",
-        }
-    );
-    result.context("Parsing failed")
 }

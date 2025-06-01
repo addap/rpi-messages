@@ -11,7 +11,7 @@ use core::{cmp, future::pending};
 
 use common::{
     consts::{IMAGE_HEIGHT, IMAGE_WIDTH},
-    protocols::pico::{CheckUpdateResult, Update, UpdateKind},
+    protocols::pico::RequestUpdateResult,
 };
 use cyw43::JoinOptions;
 use cyw43_pio::{PioSpi, DEFAULT_CLOCK_DIVIDER};
@@ -27,16 +27,7 @@ use embassy_rp::{
 };
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex, signal::Signal};
 use embassy_time::{with_timeout, Delay, Duration, Instant, Timer};
-use embedded_graphics::{
-    draw_target::DrawTarget,
-    image::{Image, ImageRaw, ImageRawBE},
-    mono_font::{self, ascii::FONT_9X15, MonoTextStyle},
-    pixelcolor::Rgb565,
-    prelude::*,
-    text::Text,
-};
 use embedded_hal_bus::spi::ExclusiveDevice;
-use error::ServerMessageError;
 use messagebuf::TextData;
 /// In deploy mode we just want to reboot the device.
 #[cfg(feature = "deploy")]
@@ -47,9 +38,10 @@ use rp2040_panic_usb_boot as _;
 use static_cell::StaticCell;
 
 use crate::error::{handle_error, Error, Result};
-use crate::messagebuf::{format_display_string, DisplayMessage, DisplayOptions, Messages};
+use crate::messagebuf::Messages;
 use crate::static_data::device_id;
 
+mod display;
 mod error;
 mod fetch_protocol;
 mod messagebuf;
@@ -58,17 +50,12 @@ mod static_data;
 const INIT_LOGGING_WAIT: Duration = Duration::from_secs(2);
 const INIT_SPI_WAIT: Duration = Duration::from_millis(100);
 const DISPLAY_FREQ: u32 = 10_000_000;
-const PRIO_MESSAGE_DISPLAY_DURATION: Duration = Duration::from_secs(1);
+const PRIO_MESSAGE_DISPLAY_DURATION: Duration = Duration::from_secs(3);
 const MESSAGE_DISPLAY_DURATION: Duration = Duration::from_secs(5);
-const MESSAGE_FONT: mono_font::MonoFont = FONT_9X15;
-const MESSAGE_TEXT_COLOR: Rgb565 = Rgb565::BLACK;
-const MESSAGE_BG_COLOR: Rgb565 = Rgb565::WHITE;
-const PRIO_MESSAGE_BG_COLOR: Rgb565 = Rgb565::RED;
-const MESSAGE_TEXT_STYLE: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&MESSAGE_FONT, MESSAGE_TEXT_COLOR);
 const MESSAGE_FETCH_INTERVAL: Duration = Duration::from_secs(60);
 const SERVER_CONNECT_ERROR_WAIT: Duration = Duration::from_secs(2);
 
-// a.d. TODO is a can we drop down to a Noop mutex? depends on if we access messages from difference executors.
+// a.d. TODO can we drop down to a Noop mutex? depends on if we access messages from difference executors.
 /// Global variable to hold message data retrieved from server. No persistence across reboots.
 /// We need the async mutex because we want to do an async read call inside a critical section.
 static MESSAGES: Mutex<CriticalSectionRawMutex, Messages> = Mutex::new(Messages::new());
@@ -77,21 +64,10 @@ static PRIO_MESSAGE_SIGNAL: Signal<CriticalSectionRawMutex, TextData> = Signal::
 static FW: &[u8; 230321] = include_bytes!("../cyw43-firmware/43439A0.bin");
 static CLM: &[u8; 4752] = include_bytes!("../cyw43-firmware/43439A0_clm.bin");
 
-type DisplaySPI = embassy_rp::peripherals::SPI1;
-// a.d. TODO implement DrawTarget & Deref
-struct ST7735 {
-    dev: st7735_lcd::ST7735<
-        ExclusiveDevice<Spi<'static, DisplaySPI, Blocking>, Output<'static>, Delay>,
-        Output<'static>,
-        Output<'static>,
-    >,
-    bl: Output<'static>,
-}
 type WifiPIO = embassy_rp::peripherals::PIO0;
 type WifiDMA = embassy_rp::peripherals::DMA_CH0;
 
-// TODO why do we need this?
-// It seems to associate a type of interrupt that the CPU knows about with a handler (so maybe populating the interrupt vector?)
+// Associate a type of interrupt that the CPU knows about with a handler (i.e. it populates the interrupt vector).
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => pio::InterruptHandler<WifiPIO>;
     USBCTRL_IRQ => usb::InterruptHandler<USB>;
@@ -105,8 +81,8 @@ mod init {
         peripherals::{DMA_CH0, PIN_23, PIN_24, PIN_25, PIN_29, PIO0},
     };
 
-    // a.d. TODO fix imports?
     use super::*;
+    use crate::display::{DisplayOptions, DisplaySPI};
 
     /// ----- Reset button setup -----
     pub(super) async fn reset(spawner: Spawner, pin: impl Pin) {
@@ -136,16 +112,14 @@ mod init {
         spi: DisplaySPI,
         clk: impl ClkPin<DisplaySPI>,
         mosi: impl MosiPin<DisplaySPI>,
-    ) -> ST7735 {
+    ) -> display::ST7735 {
         log::info!("Display initialization start.");
 
-        // create SPI
+        // Create SPI
         let mut display_config = spi::Config::default();
         display_config.frequency = DISPLAY_FREQ;
 
-        // we only have one SPI device so we don't need the SPI bus/SPIDevice machinery.
-        // a.d. order does matter, it does not work if DC pin is initialized before SPI
-        // maybe some implicit async thing where one of these is actually not completely done before the next python instruction executes
+        // We only have one SPI device so we don't need the SPI bus/SPIDevice machinery.
         let spi: Spi<'_, _, Blocking> = Spi::new_blocking_txonly(spi, clk, mosi, display_config);
         Timer::after(INIT_SPI_WAIT).await;
 
@@ -154,28 +128,24 @@ mod init {
         let rst: Output = Output::new(rst, Level::Low);
         let display_cs = Output::new(cs, Level::High);
         // Enable LCD backlight
-        // TODO Use PWM to regulate
+        // a.d. TODO Use PWM to regulate
         let bl = Output::new(bl, Level::High);
 
         // Create display driver which takes care of sending messages to the display.
         let spi_dev = ExclusiveDevice::new(spi, display_cs, Delay).unwrap();
         // let mut display = display::ST7735::new(spi, dcx, rst, display_cs, bl, IMAGE_WIDTH as u8, IMAGE_HEIGHT as u8);
-        let mut display =
+        let mut device =
             st7735_lcd::ST7735::new(spi_dev, dcx, rst, true, false, IMAGE_WIDTH as u32, IMAGE_HEIGHT as u32);
-
-        display.init(&mut Delay).unwrap();
-        // ST7735 is a 162 * 132 controller but it's connected to a 160 * 128 LCD, so we need to set an offset.
-        // display.set_offset(1, 2);
-        display
+        device.init(&mut Delay).unwrap();
+        device
             .set_orientation(&st7735_lcd::Orientation::LandscapeSwapped)
-            .unwrap();
-        // a.d. unwrap() cannot panic since our display implementation has `Infallibe` as the error type.
-        display.clear(PRIO_MESSAGE_BG_COLOR).unwrap();
-        Text::new("Booting...", Point::new(10, 20), MESSAGE_TEXT_STYLE)
-            .draw(&mut display)
-            .unwrap();
+            .expect("Initial display clear failed.");
 
-        ST7735 { dev: display, bl }
+        let mut display = display::ST7735::new(device, bl);
+        display
+            .string_formatted("Booting...", DisplayOptions::PriorityMessage)
+            .expect("Initial display draw failed.");
+        display
     }
 
     /// ----- WIFI setup -----
@@ -211,7 +181,7 @@ mod init {
             .spawn(system_tasks::cyw43(runner))
             .expect("Spawning cyw43_task failed.");
 
-        // a.d. TODO the cyw43 runner must have been spawned before doing this!
+        // The cyw43 runner must have been spawned before doing this!
         control.init(CLM).await;
         // a.d. TODO check which power management mode I want.
         control
@@ -252,7 +222,7 @@ mod init {
                 }
             }
             None => {
-                handle_error(Error::MemoryError);
+                handle_error(Error::StaticDataError);
                 pending().await
             }
         };
@@ -267,7 +237,7 @@ mod init {
                 }
             }
             None => {
-                handle_error(Error::MemoryError);
+                handle_error(Error::StaticDataError);
                 pending().await
             }
         };
@@ -329,54 +299,13 @@ mod init {
     }
 }
 
-async fn handle_update<'a>(update: Update, protocol: &mut fetch_protocol::Socket<'_>) -> Result<()> {
-    log::info!("Received an update. Acquiring mutex to change message buffer.");
-    let mut guard = MESSAGES.lock().await;
-    let messages: &mut Messages = &mut guard;
-
-    match update.kind {
-        UpdateKind::Text(_) => {
-            log::info!("Requesting text update.");
-            let message = messages.next_available_text();
-            message.set_meta(&update);
-
-            // SAFETY - We read the bytes from the network into message.data.text.
-            // If that fails (in which case the buffer could be half-filled) or if the buffer does not contain valid UTF-8 in the end, we clear the string.
-            // We are holding the message lock so no one else can access the the unsafe buffer contents while this future may be paused.
-            unsafe {
-                let message_buf = message.data.text.as_mut_vec();
-                message_buf.set_len(update.kind.size());
-                if let Err(e) = protocol.request_update(&update, message_buf).await {
-                    message_buf.clear();
-                    return Err(e);
-                }
-
-                match core::str::from_utf8(message_buf) {
-                    Ok(text) => {
-                        log::info!("Received text update: {}", text);
-                    }
-                    Err(e) => {
-                        message_buf.clear();
-                        return Err(Error::ServerMessage(ServerMessageError::Encoding(e)));
-                    }
-                }
-            }
-        }
-        UpdateKind::Image => {
-            log::info!("Requesting image update.");
-            let message = messages.next_available_image();
-            message.set_meta(&update);
-            let message_buf = message.data.image.as_mut();
-            protocol.request_update(&update, message_buf).await?;
-        }
-    };
-
-    Ok(())
-}
-
 //// ---- Main tasks to implement the device features. ------------------------
 mod main_tasks {
     use super::*;
+    use crate::{
+        display::{DisplayOptions, ST7735},
+        messagebuf::DisplayMessageData,
+    };
 
     /// This task connects to the configured server and periodically fetches new messages to update the global [`MESSAGES`] object.
     ///
@@ -407,15 +336,15 @@ mod main_tasks {
             // a.d. TODO move somewhere else
             let update_result = loop {
                 log::info!("Checking for updates");
-                match protocol.check_update(last_message_id).await {
+                match protocol.request_update(last_message_id).await {
                     Err(e) => {
                         break Err(e);
                     }
-                    Ok(CheckUpdateResult::NoUpdate) => {
+                    Ok(RequestUpdateResult::NoUpdate) => {
                         log::info!("No updates for now. Sleeping.");
                         break Ok(());
                     }
-                    Ok(CheckUpdateResult::Update(update)) => match handle_update(update, &mut protocol).await {
+                    Ok(RequestUpdateResult::Update(update)) => match protocol.handle_update(update).await {
                         Ok(()) => {
                             last_message_id = Some(last_message_id.map_or(update.id, |last| cmp::max(last, update.id)));
                         }
@@ -424,7 +353,7 @@ mod main_tasks {
                 }
             };
 
-            protocol.abort().await;
+            protocol.close().await;
 
             if let Err(e) = update_result {
                 handle_error(e);
@@ -449,7 +378,7 @@ mod main_tasks {
             log::info!("Check if priority message exists.");
 
             if let Some(prio_message) = prio_message_opt.take() {
-                format_display_string(&prio_message.text, DisplayOptions::PriorityMessage, &mut display);
+                display.string_formatted(&prio_message.text, DisplayOptions::PriorityMessage);
 
                 prio_message_opt = with_timeout(PRIO_MESSAGE_DISPLAY_DURATION, PRIO_MESSAGE_SIGNAL.wait())
                     .await
@@ -462,19 +391,17 @@ mod main_tasks {
                     last_message_time = next_message.meta.updated_at;
 
                     match next_message.data {
-                        DisplayMessage::Text(data) => {
+                        DisplayMessageData::Text(data) => {
                             log::info!("Showing a text message: {}", data.text.as_str());
-                            format_display_string(&data.text, DisplayOptions::NormalMessage, &mut display);
+                            display.string_formatted(&data.text, DisplayOptions::NormalMessage);
                         }
-                        DisplayMessage::Image(data) => {
+                        DisplayMessageData::Image(data) => {
                             log::info!("Showing an image message.");
-                            let raw: ImageRawBE<Rgb565> = ImageRaw::new(&data.image, IMAGE_WIDTH as u32);
-                            // a.d. unwrap() cannot panic since our display implementation has `Infallibe` as the error type.
-                            Image::new(&raw, Point::zero()).draw(&mut display.dev).unwrap();
+                            display.draw_image(&data.image);
                         }
                     }
                 } else {
-                    format_display_string("No messages :(", DisplayOptions::NormalMessage, &mut display);
+                    display.string_formatted("No messages :(", DisplayOptions::NormalMessage);
                 }
 
                 // Note, must drop this before waiting below so that we do not hold the lock for too long.

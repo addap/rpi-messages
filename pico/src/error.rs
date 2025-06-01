@@ -26,7 +26,7 @@ pub enum Error {
     ServerConnect(ConnectError),
     Socket,
     ServerMessage(ServerMessageError),
-    MemoryError,
+    StaticDataError,
 }
 
 impl From<common::protocols::pico::Error> for Error {
@@ -34,29 +34,6 @@ impl From<common::protocols::pico::Error> for Error {
         Self::ServerMessage(ServerMessageError::Protocol(value))
     }
 }
-
-// impl fmt::Display for ServerMessageError {
-//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-//         match self {
-//             ServerMessageError::Encoding(e) => write!(f, "{}", e),
-//             ServerMessageError::Protocol(e) => write!(f, "{}", e),
-//         }
-//     }
-// }
-
-// impl fmt::Display for Error {
-//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-//         match self {
-//             Error::WifiConnect(error) => todo!(),
-//             Error::WifiConfiguration => todo!(),
-//             Error::ServerConnect(connect_error) => todo!(),
-//             Error::Socket => todo!(),
-//             Error::Postcard(error) => todo!(),
-//             Error::ServerMessage(server_message_error) => todo!(),
-//             Error::MemoryError => todo!(),
-//         }
-//     }
-// }
 
 impl ServerMessageError {
     fn fmt<W: fmt::Write>(&self, f: &mut W) -> fmt::Result {
@@ -74,7 +51,10 @@ impl Error {
             Error::ServerConnect(_) => write!(f, "Can't connect to server. Please check Wifi connection."),
             Error::Socket => write!(f, "Internal socket error."),
             Error::ServerMessage(e) => e.fmt(f),
-            Error::MemoryError => write!(f, "Cannot read Wifi data. Please check Wifi settings."),
+            Error::StaticDataError => write!(
+                f,
+                "Cannot read static data from flash memory. Please re-flash static data uf2."
+            ),
             Error::WifiConfiguration => write!(f, "Wifi settings are not configured yet. Please flash uf2."),
         }
     }

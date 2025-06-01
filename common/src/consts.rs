@@ -1,7 +1,12 @@
-/// We save images raw (TODO which endian-ness) so we use the exact screen dimensions.
-pub const TEXT_LINES: usize = 7;
+//! We save images raw (TODO which endianness) so we use the exact screen dimensions.
+//!
+use crate::types::TextLength;
+
+pub const TEXT_LINES: usize = 8;
 pub const TEXT_COLUMNS: usize = 17;
-pub const TEXT_BUFFER_SIZE: usize = TEXT_COLUMNS * TEXT_LINES;
+pub const TEXT_LENGTH: TextLength = TEXT_LINES as u8 * TEXT_COLUMNS as u8;
+pub const TEXT_BUFFER_SIZE: usize = TEXT_LENGTH as usize;
+
 pub const IMAGE_WIDTH: usize = 160;
 pub const IMAGE_HEIGHT: usize = 128;
 pub const IMAGE_BYTES_PER_PIXEL: usize = 2;

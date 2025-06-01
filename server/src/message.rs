@@ -5,12 +5,11 @@
 
 use std::{fs::File, io::Cursor, path::Path};
 
-use anyhow::{anyhow, Context};
-use bytes::Bytes;
+use anyhow::anyhow;
 use common::{
     consts::{IMAGE_BYTES_PER_PIXEL, IMAGE_HEIGHT, IMAGE_WIDTH, TEXT_BUFFER_SIZE},
     protocols::{pico::UpdateKind, web::MessageMeta},
-    types::{DeviceID, UpdateID},
+    types::{DeviceID, MessageID, TextLength},
 };
 use image::{codecs::png::PngEncoder, DynamicImage, ImageFormat, ImageReader, ImageResult};
 use serde::{Deserialize, Serialize};
@@ -23,16 +22,48 @@ pub enum SenderID {
     Telegram,
 }
 
+/// Contains textual content of a message.
+/// To uphold an invariant on the string length this is a separate struct with private fields.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TextContent {
+    text: String,
+}
+
+impl TextContent {
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+}
+
+/// Contains image content of a message.
+/// To uphold an invariant on the image data length this is a separate struct with private fields.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ImageContent {
+    png: Vec<u8>,
+    rgb565: Vec<u8>,
+}
+
+impl ImageContent {
+    pub fn png(&self) -> &[u8] {
+        &self.png
+    }
+
+    pub fn rgb565(&self) -> &[u8] {
+        &self.rgb565
+    }
+}
+
+/// Contains the content of a message.
 #[derive(Debug, Serialize, Deserialize)]
 pub enum MessageContent {
-    Text(String),
-    Image { png: Vec<u8>, rgb565: Vec<u8> },
+    Text(TextContent),
+    Image(ImageContent),
 }
 
 impl MessageContent {
     pub fn new_text(text: String) -> Result<Self> {
         if text.bytes().len() <= TEXT_BUFFER_SIZE {
-            Ok(MessageContent::Text(text))
+            Ok(MessageContent::Text(TextContent { text }))
         } else {
             Err(anyhow!("Text message too long."))
         }
@@ -45,7 +76,7 @@ impl MessageContent {
         while bytes.len() > TEXT_BUFFER_SIZE {
             let text = &bytes[..TEXT_BUFFER_SIZE];
             let s = std::str::from_utf8(text).unwrap().to_owned();
-            texts.push(MessageContent::Text(s));
+            texts.push(MessageContent::Text(TextContent { text: s }));
 
             bytes = &bytes[TEXT_BUFFER_SIZE..]
         }
@@ -73,13 +104,13 @@ impl MessageContent {
             rgb565.push(c1);
             rgb565.push(c2);
         }
-        Ok(MessageContent::Image { png, rgb565 })
+        Ok(MessageContent::Image(ImageContent { png, rgb565 }))
     }
 }
 impl From<&MessageContent> for UpdateKind {
     fn from(value: &MessageContent) -> UpdateKind {
         match value {
-            MessageContent::Text(text) => UpdateKind::Text(text.len() as u32),
+            MessageContent::Text(tc) => UpdateKind::Text(tc.text.len() as TextLength),
             MessageContent::Image { .. } => UpdateKind::Image,
         }
     }
@@ -100,7 +131,7 @@ pub fn image_from_bytes_mime(bytes: &[u8], mime: String) -> ImageResult<DynamicI
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Message {
-    pub id: UpdateID,
+    pub id: MessageID,
     pub meta: MessageMeta,
     pub sender_id: SenderID,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -114,7 +145,7 @@ pub struct Messages {
 
 impl Message {
     pub fn new(
-        id: UpdateID,
+        id: MessageID,
         meta: MessageMeta,
         sender_id: SenderID,
         created_at: chrono::DateTime<chrono::Utc>,
@@ -136,32 +167,31 @@ impl Messages {
             receiver_id: DeviceID(0xcafebabe),
             duration: chrono::Duration::hours(24),
         };
+        let love_bytes = include_bytes!("../pictures/love.png");
 
         Self {
             inner: vec![
                 Message::new(
-                    UpdateID(0),
+                    MessageID(0),
                     meta,
                     SenderID::Web,
                     chrono::Utc::now(),
-                    MessageContent::Text("Dummy text".to_string()),
+                    MessageContent::new_text("Dummy text".to_string()).unwrap(),
                 ),
                 Message::new(
-                    UpdateID(1),
+                    MessageID(1),
                     meta,
                     SenderID::Web,
                     chrono::Utc::now(),
-                    MessageContent::Image {
-                        png: include_bytes!("../pictures/love.png").to_vec(),
-                        rgb565: include_bytes!("../pictures/love.bin").to_vec(),
-                    },
+                    MessageContent::new_image(image_from_bytes_mime(love_bytes, "image/png".to_string()).unwrap())
+                        .unwrap(),
                 ),
                 Message::new(
-                    UpdateID(2),
+                    MessageID(2),
                     meta,
                     SenderID::Web,
                     chrono::Utc::now(),
-                    MessageContent::Text("Another dummy text".to_string()),
+                    MessageContent::new_text("Another dummy text".to_string()).unwrap(),
                 ),
             ],
         }
@@ -192,7 +222,7 @@ impl Messages {
         self.store(&MESSAGE_PATH).ok();
     }
 
-    pub fn get_next_message(&self, receiver_id: DeviceID, after: Option<UpdateID>) -> Option<&Message> {
+    pub fn get_next_message(&self, receiver_id: DeviceID, after: Option<MessageID>) -> Option<&Message> {
         // first get the timestamp of the given id.
         let after = after.and_then(|id| self.get_message(id)).map(|msg| msg.created_at);
 
@@ -202,11 +232,11 @@ impl Messages {
             .min_by_key(|message| message.created_at)
     }
 
-    pub fn get_message(&self, id: UpdateID) -> Option<&Message> {
+    pub fn get_message(&self, id: MessageID) -> Option<&Message> {
         self.inner.iter().find(|message| message.id == id)
     }
 
-    pub fn next_id(&self) -> UpdateID {
-        UpdateID(self.inner.len() as u32)
+    pub fn next_id(&self) -> MessageID {
+        MessageID(self.inner.len() as u32)
     }
 }
