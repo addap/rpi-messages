@@ -11,7 +11,7 @@ use embassy_time::Duration;
 use embedded_io_async::Read;
 
 use crate::{
-    error::{Error, ServerMessageError},
+    error::{ServerMessageError, SoftError},
     messagebuf::Messages,
     static_data::{device_id, server_endpoint},
     Result, MESSAGES,
@@ -23,11 +23,11 @@ const TX_BUFFER_SIZE: usize = 256;
 
 /// a.d. TODO document
 mod internal {
-    pub struct State {
+    pub struct Token {
         _private: (),
     }
 
-    impl State {
+    impl Token {
         unsafe fn steal() -> Self {
             Self { _private: () }
         }
@@ -50,17 +50,17 @@ mod internal {
     }
 }
 
-pub use internal::State;
+pub use internal::Token;
 
 pub struct Socket<'a> {
     #[allow(unused)]
-    state: &'a mut State,
+    state: &'a mut Token,
     socket: TcpSocket<'static>,
 }
 
 impl<'a> Socket<'a> {
     pub async fn new(
-        state: &'a mut State,
+        state: &'a mut Token,
         stack: embassy_net::Stack<'static>,
         control: &mut Control<'static>,
     ) -> Result<Self> {
@@ -81,7 +81,7 @@ impl<'a> Socket<'a> {
         let connected = socket
             .connect(server_endpoint)
             .await
-            .map_err(|e| Error::ServerConnect(e));
+            .map_err(|e| SoftError::ServerConnect(e));
         control.gpio_set(0, true).await;
 
         connected.and(Ok(Self { state, socket }))
@@ -102,7 +102,7 @@ impl<'a> Socket<'a> {
         let result = RequestUpdateResult::receive(&mut reply_buf, &mut self.socket).await?;
         let valid = result
             .check_valid()
-            .map_err(|e| Error::ServerMessage(ServerMessageError::Protocol(e)));
+            .map_err(|e| SoftError::ServerMessage(ServerMessageError::Protocol(e)));
 
         log::info!("CheckUpdateResult {result:?}");
         valid.and(Ok(result))
@@ -117,7 +117,10 @@ impl<'a> Socket<'a> {
             update.kind
         );
 
-        self.socket.read_exact(payload_buf).await.map_err(|_| Error::Socket)?;
+        self.socket
+            .read_exact(payload_buf)
+            .await
+            .map_err(|_| SoftError::Socket)?;
         Ok(())
     }
 
@@ -152,7 +155,7 @@ impl<'a> Socket<'a> {
                         }
                         Err(e) => {
                             message_buf.clear();
-                            return Err(Error::ServerMessage(ServerMessageError::Encoding(e)));
+                            return Err(SoftError::ServerMessage(ServerMessageError::Encoding(e)));
                         }
                     }
                 }

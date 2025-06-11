@@ -19,6 +19,8 @@ use embedded_text::{
     TextBox,
 };
 
+use crate::error::HardError;
+
 const MESSAGE_FONT: mono_font::MonoFont = FONT_9X15;
 const MESSAGE_TEXT_COLOR: Rgb565 = Rgb565::BLACK;
 const MESSAGE_BG_COLOR: Rgb565 = Rgb565::WHITE;
@@ -51,15 +53,6 @@ pub struct ST7735 {
     dev: Device,
     #[allow(dead_code)]
     bl: Output<'static>,
-}
-
-#[derive(Debug)]
-pub struct DisplayError;
-
-impl From<()> for DisplayError {
-    fn from(_: ()) -> Self {
-        DisplayError
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -97,7 +90,7 @@ impl ST7735 {
         Self { dev, bl }
     }
 
-    pub fn string_formatted(&mut self, text: &str, options: DisplayOptions) -> Result<(), DisplayError> {
+    pub fn string_formatted(&mut self, text: &str, options: DisplayOptions) -> Result<(), HardError> {
         // Margins are not symmetric in the 9x15 font size, so at the bottom and right side there is one pixel less space (+1 in Size::new).
         let bounds = Rectangle::new(
             Point::new(MARGIN_LEFT as i32, MARGIN_TOP as i32),
@@ -108,14 +101,16 @@ impl ST7735 {
         let text_box = TextBox::with_textbox_style(text, bounds, MESSAGE_TEXT_STYLE, options.textbox_style());
 
         // Draw the text box.
-        self.dev.clear(options.clear_style())?;
-        text_box.draw(&mut self.dev)?;
+        self.dev.clear(options.clear_style()).map_err(|()| HardError::Display)?;
+        text_box.draw(&mut self.dev).map_err(|()| HardError::Display)?;
         Ok(())
     }
 
-    pub fn draw_image(&mut self, data: &[u8]) -> Result<(), DisplayError> {
+    pub fn draw_image(&mut self, data: &[u8]) -> Result<(), HardError> {
         let raw: ImageRawBE<Rgb565> = ImageRaw::new(data, IMAGE_WIDTH as u32);
-        Image::new(&raw, Point::zero()).draw(&mut self.dev)?;
+        Image::new(&raw, Point::zero())
+            .draw(&mut self.dev)
+            .map_err(|()| HardError::Display)?;
         Ok(())
     }
 }

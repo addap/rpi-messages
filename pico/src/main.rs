@@ -9,24 +9,28 @@
 
 use core::{cmp, future::pending};
 
+use assign_resources::assign_resources;
 use common::{
     consts::{IMAGE_HEIGHT, IMAGE_WIDTH},
     protocols::pico::RequestUpdateResult,
 };
+use cortex_m_rt::entry;
 use cyw43::JoinOptions;
 use cyw43_pio::{PioSpi, DEFAULT_CLOCK_DIVIDER};
-use embassy_executor::Spawner;
+use embassy_executor::{Executor, InterruptExecutor, SendSpawner, Spawner};
 use embassy_net::{self as net, StackResources};
+use embassy_rp::interrupt;
 use embassy_rp::{
     bind_interrupts,
-    gpio::{Level, Output, Pin},
-    peripherals::USB,
+    gpio::{Level, Output},
+    interrupt::{InterruptExt, Priority},
+    peripherals::{self, USB},
     pio,
-    spi::{self, Blocking, ClkPin, MosiPin, Spi},
+    spi::{self, Blocking, Spi},
     usb::{self, Driver},
 };
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex, signal::Signal};
-use embassy_time::{with_timeout, Delay, Duration, Instant, Timer};
+use embassy_time::{Delay, Duration, Instant, Timer};
 use embedded_hal_bus::spi::ExclusiveDevice;
 use messagebuf::TextData;
 /// In deploy mode we just want to reboot the device.
@@ -37,19 +41,19 @@ use panic_reset as _;
 use rp2040_panic_usb_boot as _;
 use static_cell::StaticCell;
 
-use crate::error::{handle_error, Error, Result};
 use crate::messagebuf::Messages;
 use crate::static_data::device_id;
+use crate::{
+    display::ST7735,
+    error::{handle_soft_error, Result, SoftError},
+};
 
 mod display;
 mod error;
-mod fetch_protocol;
+mod fetch_data;
 mod messagebuf;
 mod static_data;
 
-const INIT_LOGGING_WAIT: Duration = Duration::from_secs(2);
-const INIT_SPI_WAIT: Duration = Duration::from_millis(100);
-const DISPLAY_FREQ: u32 = 10_000_000;
 const PRIO_MESSAGE_DISPLAY_DURATION: Duration = Duration::from_secs(3);
 const MESSAGE_DISPLAY_DURATION: Duration = Duration::from_secs(5);
 const MESSAGE_FETCH_INTERVAL: Duration = Duration::from_secs(60);
@@ -76,60 +80,57 @@ bind_interrupts!(struct Irqs {
 //// ---- Hardware initialization functions. ----------------------------------
 
 mod init {
-    use embassy_rp::{
-        gpio,
-        peripherals::{DMA_CH0, PIN_23, PIN_24, PIN_25, PIN_29, PIO0},
-    };
+    use embassy_executor::SendSpawner;
+    use embassy_rp::gpio;
+    use embedded_hal::delay::DelayNs;
 
     use super::*;
-    use crate::display::{DisplayOptions, DisplaySPI};
+    use crate::display::DisplayOptions;
+
+    const BOOT_MESSAGE_WAIT_MS: u32 = 1_000;
+    const INIT_LOGGING_WAIT_MS: u32 = 2_000;
+    const INIT_SPI_WAIT_MS: u32 = 100;
+    const DISPLAY_SPI_FREQ: u32 = 10_000_000;
 
     /// ----- Reset button setup -----
-    pub(super) async fn reset(spawner: Spawner, pin: impl Pin) {
-        let button = gpio::Input::new(pin, gpio::Pull::Up);
+    pub(super) fn reset(spawner: Spawner, r: ResetResources) {
+        let button = gpio::Input::new(r.pin, gpio::Pull::Up);
         spawner
             .spawn(system_tasks::resetter(button))
             .expect("Spawning resetter task failed.")
     }
 
     /// ----- USB logging setup -----
-    pub(super) async fn usb(spawner: Spawner, usb: USB) {
-        let driver = Driver::new(usb, Irqs);
+    pub(super) fn usb(spawner: SendSpawner, r: UsbLogResources) {
+        let driver = Driver::new(r.usb, Irqs);
 
         spawner
             .spawn(system_tasks::logger(driver))
             .expect("Spawning logger task failed.");
         // Wait until the USB host picks up our device.
-        Timer::after(INIT_LOGGING_WAIT).await;
+        embassy_time::Delay.delay_ms(INIT_LOGGING_WAIT_MS);
     }
 
     /// ----- Display setup -----
-    pub(super) async fn display(
-        bl: impl Pin,
-        cs: impl Pin,
-        dcx: impl Pin,
-        rst: impl Pin,
-        spi: DisplaySPI,
-        clk: impl ClkPin<DisplaySPI>,
-        mosi: impl MosiPin<DisplaySPI>,
-    ) -> display::ST7735 {
+    pub(super) fn display(r: DisplayResources) -> display::ST7735 {
         log::info!("Display initialization start.");
 
         // Create SPI
         let mut display_config = spi::Config::default();
-        display_config.frequency = DISPLAY_FREQ;
+        display_config.frequency = DISPLAY_SPI_FREQ;
 
         // We only have one SPI device so we don't need the SPI bus/SPIDevice machinery.
-        let spi: Spi<'_, _, Blocking> = Spi::new_blocking_txonly(spi, clk, mosi, display_config);
-        Timer::after(INIT_SPI_WAIT).await;
+        let spi: Spi<'_, _, Blocking> = Spi::new_blocking_txonly(r.spi, r.clk, r.mosi, display_config);
+        embassy_time::Delay.delay_ms(INIT_SPI_WAIT_MS);
+        // Timer::after(INIT_SPI_WAIT_MS).await;
 
         // dcx: 0 = command, 1 = data
-        let dcx = Output::new(dcx, Level::Low);
-        let rst: Output = Output::new(rst, Level::Low);
-        let display_cs = Output::new(cs, Level::High);
+        let dcx = Output::new(r.dcx, Level::Low);
+        let rst: Output = Output::new(r.rst, Level::Low);
+        let display_cs = Output::new(r.cs, Level::High);
         // Enable LCD backlight
         // a.d. TODO Use PWM to regulate
-        let bl = Output::new(bl, Level::High);
+        let bl = Output::new(r.bl, Level::High);
 
         // Create display driver which takes care of sending messages to the display.
         let spi_dev = ExclusiveDevice::new(spi, display_cs, Delay).unwrap();
@@ -145,32 +146,28 @@ mod init {
         display
             .string_formatted("Booting...", DisplayOptions::PriorityMessage)
             .expect("Initial display draw failed.");
+        embassy_time::Delay.delay_ms(BOOT_MESSAGE_WAIT_MS);
         display
     }
 
     /// ----- WIFI setup -----
     pub(super) async fn cyw43(
         spawner: Spawner,
-        pwr: PIN_23,
-        cs: PIN_25,
-        pio: PIO0,
-        dio: PIN_24,
-        clk: PIN_29,
-        dma: DMA_CH0,
+        r: Cyw43Resources,
     ) -> (cyw43::NetDriver<'static>, cyw43::Control<'static>) {
         log::info!("Initialization of cyw43 WIFI chip started.");
-        let pwr = Output::new(pwr, Level::Low);
-        let cs = Output::new(cs, Level::High);
-        let mut pio = pio::Pio::new(pio, Irqs);
+        let pwr = Output::new(r.pwr, Level::Low);
+        let cs = Output::new(r.cs, Level::High);
+        let mut pio = pio::Pio::new(r.pio, Irqs);
         let spi = PioSpi::new(
             &mut pio.common,
             pio.sm0,
             DEFAULT_CLOCK_DIVIDER,
             pio.irq0,
             cs,
-            dio,
-            clk,
-            dma,
+            r.dio,
+            r.clk,
+            r.dma,
         );
 
         static STATE: StaticCell<cyw43::State> = StaticCell::new();
@@ -215,14 +212,14 @@ mod init {
         let wifi_ssid = match static_data::wifi_ssid() {
             Some(wifi_ssid) => {
                 if wifi_ssid.is_empty() {
-                    handle_error(Error::WifiConfiguration);
+                    handle_soft_error(SoftError::WifiConfiguration);
                     pending().await
                 } else {
                     wifi_ssid
                 }
             }
             None => {
-                handle_error(Error::StaticDataError);
+                handle_soft_error(SoftError::StaticDataError);
                 pending().await
             }
         };
@@ -230,14 +227,14 @@ mod init {
         let wifi_pw = match static_data::wifi_password() {
             Some(wifi_pw) => {
                 if wifi_pw.is_empty() {
-                    handle_error(Error::WifiConfiguration);
+                    handle_soft_error(SoftError::WifiConfiguration);
                     pending().await
                 } else {
                     wifi_pw
                 }
             }
             None => {
-                handle_error(Error::StaticDataError);
+                handle_soft_error(SoftError::StaticDataError);
                 pending().await
             }
         };
@@ -255,7 +252,7 @@ mod init {
                 }
                 Err(e) => {
                     log::info!("WIFI connection failed with status={}", e.status);
-                    handle_error(Error::WifiConnect(e));
+                    handle_soft_error(SoftError::WifiConnect(e));
                 }
             }
         }
@@ -301,11 +298,11 @@ mod init {
 
 //// ---- Main tasks to implement the device features. ------------------------
 mod main_tasks {
+
     use super::*;
-    use crate::{
-        display::{DisplayOptions, ST7735},
-        messagebuf::DisplayMessageData,
-    };
+    use crate::display::DisplayOptions;
+    use crate::error::handle_hard_error;
+    use crate::messagebuf::DisplayMessageData;
 
     /// This task connects to the configured server and periodically fetches new messages to update the global [`MESSAGES`] object.
     ///
@@ -313,7 +310,7 @@ mod main_tasks {
     /// - [`control`]: The driver of the WIFI chip. TODO usage not clear.
     #[embassy_executor::task]
     pub(super) async fn fetch_data(
-        mut state: fetch_protocol::State,
+        mut state: fetch_data::Token,
         stack: net::Stack<'static>,
         mut control: cyw43::Control<'static>,
     ) {
@@ -322,11 +319,11 @@ mod main_tasks {
 
         loop {
             log::info!("Creating new connection.");
-            let protocol = fetch_protocol::Socket::new(&mut state, stack, &mut control).await;
+            let protocol = fetch_data::Socket::new(&mut state, stack, &mut control).await;
             let mut protocol = match protocol {
                 Ok(protocol) => protocol,
                 Err(e) => {
-                    handle_error(e);
+                    handle_soft_error(e);
                     Timer::after(SERVER_CONNECT_ERROR_WAIT).await;
                     continue;
                 }
@@ -356,9 +353,24 @@ mod main_tasks {
             protocol.close().await;
 
             if let Err(e) = update_result {
-                handle_error(e);
+                handle_soft_error(e);
             }
             Timer::after(MESSAGE_FETCH_INTERVAL).await;
+        }
+    }
+
+    #[embassy_executor::task]
+    pub(super) async fn display_prio_messages(display: &'static SharedDisplay) {
+        loop {
+            let message = PRIO_MESSAGE_SIGNAL.wait().await;
+            let mut display = display.lock().await;
+            display
+                .string_formatted(&message.text, DisplayOptions::PriorityMessage)
+                .map_err(|e| handle_hard_error(e))
+                .ok();
+            drop(display);
+
+            Timer::after(PRIO_MESSAGE_DISPLAY_DURATION).await;
         }
     }
 
@@ -366,76 +378,144 @@ mod main_tasks {
     ///
     /// - [`display`]: a driver to interact with the display's ST7735 chip.
     #[embassy_executor::task]
-    pub(super) async fn display_messages(mut display: ST7735) {
+    pub(super) async fn display_messages(display: &'static SharedDisplay) {
         let mut last_message_time = Instant::MIN;
-        let mut prio_message_opt: Option<TextData> = None;
 
-        // Each time the loop is entered we immediately display a priority message if we are currently holding one.
-        // Priority messages are shown for `PRIO_MESSAGE_DISPLAY_DURATION` or until a new priority message arrives.
-        // If there is no priority message we display the next non-priority message and then wait for `MESSAGE_DISPLAY_DURATION`
-        // or until a new priority message arrives.
+        // Each time the loop is entered we display the next non-priority message and then wait for `MESSAGE_DISPLAY_DURATION`
+        // Note that if a priority message arrives this will be interrupted (outside of the critical section of locking the display)
         loop {
-            log::info!("Check if priority message exists.");
+            log::info!("Acquiring mutex for message buffer and for display.");
+            let messages = MESSAGES.lock().await;
 
-            if let Some(prio_message) = prio_message_opt.take() {
-                display.string_formatted(&prio_message.text, DisplayOptions::PriorityMessage);
-
-                prio_message_opt = with_timeout(PRIO_MESSAGE_DISPLAY_DURATION, PRIO_MESSAGE_SIGNAL.wait())
-                    .await
-                    .ok();
-            } else {
-                log::info!("No priority message found. Acquiring mutex to read message buffer.");
-                let guard = MESSAGES.lock().await;
-                let messages: &Messages = &guard;
-                if let Some(next_message) = messages.next_display_message_generic(last_message_time) {
-                    last_message_time = next_message.meta.updated_at;
-
-                    match next_message.data {
-                        DisplayMessageData::Text(data) => {
-                            log::info!("Showing a text message: {}", data.text.as_str());
-                            display.string_formatted(&data.text, DisplayOptions::NormalMessage);
-                        }
-                        DisplayMessageData::Image(data) => {
-                            log::info!("Showing an image message.");
-                            display.draw_image(&data.image);
-                        }
+            if let Some(next_message) = messages.next_display_message_generic(last_message_time) {
+                last_message_time = next_message.meta.updated_at;
+                match next_message.data {
+                    DisplayMessageData::Text(data) => {
+                        log::info!("Showing a text message: {}", data.text.as_str());
+                        let mut display = display.lock().await;
+                        display
+                            .string_formatted(&data.text, DisplayOptions::NormalMessage)
+                            .map_err(|e| handle_hard_error(e))
+                            .ok();
                     }
-                } else {
-                    display.string_formatted("No messages :(", DisplayOptions::NormalMessage);
+                    DisplayMessageData::Image(data) => {
+                        log::info!("Showing an image message.");
+                        let mut display = display.lock().await;
+                        display.draw_image(&data.image).map_err(|e| handle_hard_error(e)).ok();
+                    }
                 }
-
-                // Note, must drop this before waiting below so that we do not hold the lock for too long.
-                drop(guard);
-
-                prio_message_opt = with_timeout(MESSAGE_DISPLAY_DURATION, PRIO_MESSAGE_SIGNAL.wait())
-                    .await
+            } else {
+                let mut display = display.lock().await;
+                display
+                    .string_formatted("No messages :(", DisplayOptions::NormalMessage)
+                    .map_err(|e| handle_hard_error(e))
                     .ok();
             }
+
+            // Must drop this before waiting below so that we do not hold the locks for too long.
+            drop(messages);
+
+            Timer::after(MESSAGE_DISPLAY_DURATION).await;
         }
     }
 }
 
-#[embassy_executor::main]
-async fn main(spawner: Spawner) {
-    let p = embassy_rp::init(Default::default());
-    let protocol_state = fetch_protocol::State::take();
+static EXECUTOR_HIGH: InterruptExecutor = InterruptExecutor::new();
+static EXECUTOR_NORMAL: StaticCell<Executor> = StaticCell::new();
 
-    init::reset(spawner, p.PIN_1).await;
-    init::usb(spawner, p.USB).await;
+type SharedDisplay = Mutex<CriticalSectionRawMutex, ST7735>;
+// TODO Either use StaticCell or just mutex containing option. Which is better?
+// With StaticCell we at least don't have the error that the content of the Mutex might be None.
+static DISPLAY: StaticCell<SharedDisplay> = StaticCell::new();
+
+#[interrupt]
+unsafe fn SWI_IRQ_0() {
+    EXECUTOR_HIGH.on_interrupt();
+}
+
+assign_resources! {
+    usb_log: UsbLogResources {
+        usb: USB
+    }
+    display: DisplayResources {
+        bl: PIN_6,
+        cs: PIN_7,
+        dcx: PIN_8,
+        rst: PIN_9,
+        spi: SPI1,
+        clk: PIN_10,
+        mosi: PIN_11,
+    }
+    reset: ResetResources {
+        pin: PIN_1,
+    }
+    cyw43: Cyw43Resources {
+        pwr: PIN_23,
+        cs: PIN_25,
+        pio: PIO0,
+        dio: PIN_24,
+        clk: PIN_29,
+        dma: DMA_CH0
+    }
+}
+
+fn init_priority_tasks(
+    spawner: SendSpawner,
+    r_usb_log: UsbLogResources,
+    r_display: DisplayResources,
+) -> &'static SharedDisplay {
+    init::usb(spawner, r_usb_log);
     log::info!("Booting device with ID: 0x{:08x}", device_id());
+    let display = init::display(r_display);
+    let display = DISPLAY.init(Mutex::new(display));
+    spawner
+        .spawn(main_tasks::display_prio_messages(display))
+        .expect("Spawning display_prio_messages task failed.");
 
-    let display = init::display(p.PIN_6, p.PIN_7, p.PIN_8, p.PIN_9, p.SPI1, p.PIN_10, p.PIN_11).await;
+    display
+}
+
+#[embassy_executor::task]
+async fn init_normal_tasks(
+    spawner: Spawner,
+    protocol_token: fetch_data::Token,
+    r_reset: ResetResources,
+    r_cyw43: Cyw43Resources,
+    display: &'static SharedDisplay,
+) {
+    init::reset(spawner, r_reset);
+
     spawner
         .spawn(main_tasks::display_messages(display))
         .expect("Spawning display_messages_task failed.");
-    let (cyw43_driver, mut cyw43_control) =
-        init::cyw43(spawner, p.PIN_23, p.PIN_25, p.PIO0, p.PIN_24, p.PIN_29, p.DMA_CH0).await;
+
+    let (cyw43_driver, mut cyw43_control) = init::cyw43(spawner, r_cyw43).await;
     let net_stack = init::net(spawner, cyw43_driver).await;
 
     init::wifi(&mut cyw43_control).await;
     spawner
-        .spawn(main_tasks::fetch_data(protocol_state, net_stack, cyw43_control))
+        .spawn(main_tasks::fetch_data(protocol_token, net_stack, cyw43_control))
         .expect("Spawning fetch_data_task failed.");
 
     log::info!("Finished configuration.");
+}
+
+#[entry]
+fn main() -> ! {
+    let p = embassy_rp::init(Default::default());
+    let r = split_resources!(p);
+    let protocol_token = fetch_data::Token::take();
+
+    // spawn high priority tasks
+    interrupt::SWI_IRQ_0.set_priority(Priority::P3);
+    let interrupt_spawner = EXECUTOR_HIGH.start(interrupt::SWI_IRQ_0);
+    let display = init_priority_tasks(interrupt_spawner, r.usb_log, r.display);
+
+    // spawn low priority tasks
+    let thread_executor = EXECUTOR_NORMAL.init_with(Executor::new);
+    thread_executor.run(|spawner| {
+        spawner
+            .spawn(init_normal_tasks(spawner, protocol_token, r.reset, r.cyw43, display))
+            .expect("Spawning init_system_tasks task failed.")
+    });
 }
