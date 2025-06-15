@@ -39,6 +39,12 @@ impl FromStr for MessageID {
     }
 }
 
+impl fmt::Display for DeviceID {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "0x{:08x}", self)
+    }
+}
+
 impl fmt::UpperHex for DeviceID {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::UpperHex::fmt(&self.0, f)

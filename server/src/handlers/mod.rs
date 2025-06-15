@@ -1,3 +1,4 @@
+pub mod configure;
 pub mod device;
-mod uf2;
+pub mod telegram;
 pub mod web;

@@ -7,27 +7,27 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 
-use crate::message::{MessageContent, Messages};
+use crate::message::{Db, MessageContent};
 
 const ADDRESS: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 1338);
 
-pub async fn run(messages: Arc<Mutex<Messages>>) {
+pub async fn run(messages: Arc<Mutex<Db>>) {
     log::info!("Listening for TCP connections from device at {ADDRESS}.");
     let listener = TcpListener::bind(ADDRESS).await.unwrap();
 
     loop {
-        println!("Listening for client connections.");
+        log::info!("Listening for client connections.");
         match listener.accept().await {
             Ok((socket, addr)) => {
-                println!("new client at {:?}", addr);
+                log::info!("new client at {:?}", addr);
                 handle_client(socket, &messages).await
             }
-            Err(e) => println!("couldn't get client: {e:?}"),
+            Err(e) => log::error!("couldn't get client: {e:?}"),
         }
     }
 }
 
-async fn handle_client(mut socket: TcpStream, messages: &Mutex<Messages>) {
+async fn handle_client(mut socket: TcpStream, messages: &Mutex<Db>) {
     loop {
         match ClientCommand::receive_alloc(&mut socket).await {
             Err(e) => {

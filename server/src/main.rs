@@ -3,11 +3,14 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use axum::{http::StatusCode, response::IntoResponse};
-use message::Messages;
 use tokio::{sync::Mutex, task};
+use message::Db;
+use teloxide::types::UserId;
+use crate::users::User;
 
 mod handlers;
 mod message;
+mod users;
 
 const MESSAGE_PATH: &str = "./messages.json";
 
@@ -28,9 +31,16 @@ async fn main() {
 }
 
 // Messages need to be in an Arc to use axum::debug_handler.
-async fn init_messages() -> Arc<Mutex<Messages>> {
+async fn init_db() -> Arc<Mutex<Db>> {
     // let messages = message::Messages::load(&MESSAGE_PATH);
-    let messages = Messages::dummy();
+    let admin = UserId(
+        std::env::var("ADMIN_CHAT_ID")
+            .expect("ADMIN_CHAT_ID not set")
+            .parse()
+            .expect("ADMIN_CHAT_ID invalid"),
+    );
+    let admin = User::new_telegram(admin).authenticate();
+    let messages = Db::dummy(admin);
     Arc::new(Mutex::new(messages))
 }
 

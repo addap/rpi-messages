@@ -14,7 +14,10 @@ use common::{
 use image::{codecs::png::PngEncoder, DynamicImage, ImageFormat, ImageReader, ImageResult};
 use serde::{Deserialize, Serialize};
 
-use crate::{Result, MESSAGE_PATH};
+use crate::{
+    users::{Auth, Authenticated, User},
+    Result, MESSAGE_PATH,
+};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum SenderID {
@@ -68,6 +71,7 @@ impl MessageContent {
             Err(anyhow!("Text message too long."))
         }
     }
+
     pub fn new_texts(text: String) -> Result<Vec<Self>> {
         // TODO iterate in a way that we don't split up unicode chars.
         let mut texts = vec![];
@@ -139,8 +143,9 @@ pub struct Message {
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
-pub struct Messages {
-    inner: Vec<Message>,
+pub struct Db {
+    messages: Vec<Message>,
+    authenticated_users: Vec<User<Authenticated>>,
 }
 
 impl Message {
@@ -161,8 +166,8 @@ impl Message {
     }
 }
 
-impl Messages {
-    pub fn dummy() -> Self {
+impl Db {
+    pub fn dummy(admin: User<Authenticated>) -> Self {
         let meta = MessageMeta {
             receiver_id: DeviceID(0xcafebabe),
             duration: chrono::Duration::hours(24),
@@ -170,7 +175,7 @@ impl Messages {
         let love_bytes = include_bytes!("../pictures/love.png");
 
         Self {
-            inner: vec![
+            messages: vec![
                 Message::new(
                     MessageID(0),
                     meta,
@@ -194,11 +199,15 @@ impl Messages {
                     MessageContent::new_text("Another dummy text".to_string()).unwrap(),
                 ),
             ],
+            authenticated_users: vec![admin],
         }
     }
 
     pub const fn new() -> Self {
-        Self { inner: Vec::new() }
+        Self {
+            messages: Vec::new(),
+            authenticated_users: Vec::new(),
+        }
     }
 
     fn load_file<P: AsRef<Path>>(p: &P) -> Result<Self> {
@@ -218,7 +227,7 @@ impl Messages {
     }
 
     pub fn add_message(&mut self, message: Message) {
-        self.inner.push(message);
+        self.messages.push(message);
         self.store(&MESSAGE_PATH).ok();
     }
 
@@ -226,17 +235,17 @@ impl Messages {
         // first get the timestamp of the given id.
         let after = after.and_then(|id| self.get_message(id)).map(|msg| msg.created_at);
 
-        self.inner
+        self.messages
             .iter()
             .filter(|message| message.meta.receiver_id == receiver_id && Some(message.created_at) > after)
             .min_by_key(|message| message.created_at)
     }
 
     pub fn get_message(&self, id: MessageID) -> Option<&Message> {
-        self.inner.iter().find(|message| message.id == id)
+        self.messages.iter().find(|message| message.id == id)
     }
 
     pub fn next_id(&self) -> MessageID {
-        MessageID(self.inner.len() as u32)
+        MessageID(self.messages.len() as u32)
     }
 }

@@ -24,11 +24,12 @@ use tokio::sync::Mutex;
 use tower::Layer;
 use tower_http::{normalize_path::NormalizePathLayer, services::ServeFile, trace::TraceLayer};
 
-use super::uf2::submit_wifi_config;
 use crate::{
-    message::{image_from_bytes_mime, Message, MessageContent, Messages, SenderID},
+    message::{image_from_bytes_mime, Db, Message, MessageContent, SenderID},
     AppError, WebResult,
 };
+
+mod image;
 
 const ADDRESS: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 3000);
 // Define maximum upload file size to be 8MB.
@@ -38,7 +39,7 @@ static INDEX_JS_PATH: &str = "webclient/index.js";
 
 #[axum::debug_handler]
 async fn new_text_message(
-    State(messages): State<Arc<Mutex<Messages>>>,
+    State(messages): State<Arc<Mutex<Db>>>,
     Form(new_message): Form<NewTextMessage>,
 ) -> WebResult<Json<()>> {
     let mut guard = messages.lock().await;
@@ -78,7 +79,7 @@ async fn new_text_message(
 
 #[axum::debug_handler]
 async fn new_image_message(
-    State(messages): State<Arc<Mutex<Messages>>>,
+    State(messages): State<Arc<Mutex<Db>>>,
     mut multipart: Multipart,
 ) -> WebResult<Json<NewMessageCreated>> {
     log::info!("Handling new image multipart message.");
@@ -162,7 +163,7 @@ where
 
 #[axum::debug_handler]
 async fn latest_message(
-    State(messages): State<Arc<Mutex<Messages>>>,
+    State(messages): State<Arc<Mutex<Db>>>,
     Path(for_device): Path<String>,
     Query(params): Query<LatestQueryParams>,
 ) -> WebResult<Response> {
@@ -185,7 +186,7 @@ async fn latest_message(
     }
 }
 
-pub async fn run(messages: Arc<Mutex<Messages>>) {
+pub async fn run(messages: Arc<Mutex<Db>>) {
     let web_client = {
         let index_html = ServeFile::new(INDEX_PATH);
         let index_js = ServeFile::new(INDEX_JS_PATH);
@@ -212,7 +213,6 @@ pub async fn run(messages: Arc<Mutex<Messages>>) {
                 "/new_image_message",
                 post(new_image_message).layer(DefaultBodyLimit::max(UPLOAD_BODY_LIMIT)),
             )
-            .route("/submit_wifi_config", post(submit_wifi_config))
             .with_state(messages)
     };
     let router = Router::new()
@@ -227,7 +227,7 @@ pub async fn run(messages: Arc<Mutex<Messages>>) {
     // from https://github.com/tokio-rs/axum/discussions/2377#discussioncomment-9847433
     let app = ServiceExt::<Request>::into_make_service(app);
 
-    log::info!("Starting web server at {ADDRESS}");
+    log::info!("Starting web server at {ADDRESS}.");
     let listener = tokio::net::TcpListener::bind(ADDRESS).await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }
