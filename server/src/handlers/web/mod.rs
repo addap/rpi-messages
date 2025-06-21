@@ -20,13 +20,13 @@ use common::{
     types::{DeviceID, MessageID},
 };
 use serde::{de, Deserialize, Deserializer};
-use tokio::sync::Mutex;
 use tower::Layer;
 use tower_http::{normalize_path::NormalizePathLayer, services::ServeFile, trace::TraceLayer};
 
+use crate::message::{image_from_bytes_mime, InsertMessage, Message, MessageContent, SenderID};
 use crate::{
-    message::{image_from_bytes_mime, Db, Message, MessageContent, SenderID},
-    AppError, WebResult,
+    error::{WebError, WebResult},
+    message_db::Db,
 };
 
 mod image;
@@ -39,20 +39,13 @@ static INDEX_JS_PATH: &str = "webclient/index.js";
 
 #[axum::debug_handler]
 async fn new_text_message(
-    State(messages): State<Arc<Mutex<Db>>>,
+    State(messages): State<Arc<Db>>,
     Form(new_message): Form<NewTextMessage>,
 ) -> WebResult<Json<()>> {
-    let mut guard = messages.lock().await;
-    let new_message_content = MessageContent::new_text(new_message.text)?;
-    let new_message = Message::new(
-        guard.next_id(),
-        new_message.meta,
-        SenderID::Web,
-        Utc::now(),
-        new_message_content,
-    );
+    let new_message_content = MessageContent::new_text(&new_message.text)?;
+    let new_message = InsertMessage::new(new_message.meta, SenderID::Web, Utc::now(), new_message_content);
 
-    guard.add_message(new_message);
+    messages.add_message(new_message).await;
     Ok(Json(()))
 }
 
@@ -79,7 +72,7 @@ async fn new_text_message(
 
 #[axum::debug_handler]
 async fn new_image_message(
-    State(messages): State<Arc<Mutex<Db>>>,
+    State(messages): State<Arc<Db>>,
     mut multipart: Multipart,
 ) -> WebResult<Json<NewMessageCreated>> {
     log::info!("Handling new image multipart message.");
@@ -128,11 +121,8 @@ async fn new_image_message(
     let meta = MessageMeta { receiver_id, duration };
 
     let new_message_content = MessageContent::new_image(image)?;
-    let mut guard = messages.lock().await;
-    let id = guard.next_id();
-    let new_message = Message::new(id, meta, SenderID::Web, Utc::now(), new_message_content);
-    guard.add_message(new_message);
-    drop(guard);
+    let new_message = InsertMessage::new(meta, SenderID::Web, Utc::now(), new_message_content);
+    let id = messages.add_message(new_message).await;
 
     Ok(Json(NewMessageCreated { id }))
 }
@@ -163,14 +153,13 @@ where
 
 #[axum::debug_handler]
 async fn latest_message(
-    State(messages): State<Arc<Mutex<Db>>>,
+    State(messages): State<Arc<Db>>,
     Path(for_device): Path<String>,
     Query(params): Query<LatestQueryParams>,
 ) -> WebResult<Response> {
     let receiver_id = DeviceID::from_str(&for_device).context("failed to parse receiver_id")?;
 
-    let guard = messages.lock().await;
-    match guard.get_next_message(receiver_id, params.after) {
+    match messages.get_next_message(receiver_id, params.after).await {
         Some(Message {
             content: MessageContent::Text(text),
             ..
@@ -179,14 +168,14 @@ async fn latest_message(
             content: MessageContent::Image(image),
             ..
         }) => Ok(([(header::CONTENT_TYPE, "image/png")], image.png().to_owned()).into_response()),
-        _ => Err(AppError::not_found(&format!(
+        _ => Err(WebError::not_found(&format!(
             "Latest message for {:#010X}",
             receiver_id
         ))),
     }
 }
 
-pub async fn run(messages: Arc<Mutex<Db>>) {
+pub async fn run(messages: Arc<Db>) {
     let web_client = {
         let index_html = ServeFile::new(INDEX_PATH);
         let index_js = ServeFile::new(INDEX_JS_PATH);

@@ -5,13 +5,13 @@ use common::protocols::pico::serialization::Transmission;
 use common::protocols::pico::{ClientCommand, RequestUpdateResult, Update, UpdateKind};
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::Mutex;
 
-use crate::message::{Db, MessageContent};
+use crate::message::MessageContent;
+use crate::message_db::Db;
 
 const ADDRESS: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 1338);
 
-pub async fn run(messages: Arc<Mutex<Db>>) {
+pub async fn run(messages: Arc<Db>) {
     log::info!("Listening for TCP connections from device at {ADDRESS}.");
     let listener = TcpListener::bind(ADDRESS).await.unwrap();
 
@@ -20,14 +20,20 @@ pub async fn run(messages: Arc<Mutex<Db>>) {
         match listener.accept().await {
             Ok((socket, addr)) => {
                 log::info!("new client at {:?}", addr);
-                handle_client(socket, &messages).await
+                // a.d. TODO collect join handles and clean up?
+                tokio::spawn({
+                    let messages = messages.clone();
+                    // note: need async move block so that messages is not dropped too early. the block will own the messages object.
+                    async move { handle_client(socket, &*messages).await }
+                });
             }
             Err(e) => log::error!("couldn't get client: {e:?}"),
         }
     }
 }
 
-async fn handle_client(mut socket: TcpStream, messages: &Mutex<Db>) {
+// a.d. TODO I'm not sure I want a Sync here => read the async book
+async fn handle_client(mut socket: TcpStream, messages: &Db) {
     loop {
         match ClientCommand::receive_alloc(&mut socket).await {
             Err(e) => {
@@ -37,8 +43,7 @@ async fn handle_client(mut socket: TcpStream, messages: &Mutex<Db>) {
             Ok(ClientCommand::RequestUpdate(device_id, after)) => {
                 log::trace!("RequestUpdate acquiring lock.");
 
-                let guard = messages.lock().await;
-                match guard.get_next_message(device_id, after) {
+                match messages.get_next_message(device_id, after).await {
                     Some(message) => {
                         let message_update = Update {
                             lifetime_sec: message.meta.duration.num_seconds() as u32,

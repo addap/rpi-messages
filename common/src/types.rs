@@ -9,12 +9,12 @@ use crate::consts;
 pub type TextLength = u8;
 const _: () = assert!(consts::TEXT_BUFFER_SIZE <= TextLength::MAX as usize);
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "postcard", derive(MaxSize))]
 #[serde(transparent)]
 #[repr(transparent)]
 pub struct DeviceID(pub u32);
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "postcard", derive(MaxSize))]
 #[serde(transparent)]
 #[repr(transparent)]

@@ -7,7 +7,7 @@ use axum::{
 use common::consts::{WIFI_PW_LEN, WIFI_SSID_LEN};
 use serde::Deserialize;
 
-use crate::WebResult;
+use crate::error::WebResult;
 
 #[derive(Deserialize)]
 pub struct WifiData {

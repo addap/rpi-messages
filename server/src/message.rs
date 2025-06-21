@@ -3,21 +3,18 @@
 //!  
 //!
 
-use std::{fs::File, io::Cursor, path::Path};
+use std::io::Cursor;
 
 use anyhow::anyhow;
 use common::{
     consts::{IMAGE_BYTES_PER_PIXEL, IMAGE_HEIGHT, IMAGE_WIDTH, TEXT_BUFFER_SIZE},
     protocols::{pico::UpdateKind, web::MessageMeta},
-    types::{DeviceID, MessageID, TextLength},
+    types::{MessageID, TextLength},
 };
 use image::{codecs::png::PngEncoder, DynamicImage, ImageFormat, ImageReader, ImageResult};
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    users::{Auth, Authenticated, User},
-    Result, MESSAGE_PATH,
-};
+use crate::error::Result;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum SenderID {
@@ -27,7 +24,7 @@ pub enum SenderID {
 
 /// Contains textual content of a message.
 /// To uphold an invariant on the string length this is a separate struct with private fields.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TextContent {
     text: String,
 }
@@ -40,7 +37,7 @@ impl TextContent {
 
 /// Contains image content of a message.
 /// To uphold an invariant on the image data length this is a separate struct with private fields.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageContent {
     png: Vec<u8>,
     rgb565: Vec<u8>,
@@ -57,16 +54,17 @@ impl ImageContent {
 }
 
 /// Contains the content of a message.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MessageContent {
     Text(TextContent),
     Image(ImageContent),
 }
 
 impl MessageContent {
-    pub fn new_text(text: String) -> Result<Self> {
+    // a.d. TOOD str vs String
+    pub fn new_text(text: &str) -> Result<Self> {
         if text.bytes().len() <= TEXT_BUFFER_SIZE {
-            Ok(MessageContent::Text(TextContent { text }))
+            Ok(MessageContent::Text(TextContent { text: text.to_string() }))
         } else {
             Err(anyhow!("Text message too long."))
         }
@@ -133,119 +131,48 @@ pub fn image_from_bytes_mime(bytes: &[u8], mime: String) -> ImageResult<DynamicI
     img_reader.decode()
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub id: MessageID,
+    // a.d. TODO why meta separate? either put other stuff also in there or remove it.
     pub meta: MessageMeta,
     pub sender_id: SenderID,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub content: MessageContent,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
-pub struct Db {
-    messages: Vec<Message>,
-    authenticated_users: Vec<User<Authenticated>>,
+impl Message {
+    pub fn from_insert(id: MessageID, message: InsertMessage) -> Self {
+        Self {
+            id,
+            meta: message.meta,
+            sender_id: message.sender_id,
+            created_at: message.created_at,
+            content: message.content,
+        }
+    }
 }
 
-impl Message {
+#[derive(Debug, Clone, Serialize)]
+pub struct InsertMessage {
+    pub meta: MessageMeta,
+    pub sender_id: SenderID,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub content: MessageContent,
+}
+
+impl InsertMessage {
     pub fn new(
-        id: MessageID,
         meta: MessageMeta,
         sender_id: SenderID,
         created_at: chrono::DateTime<chrono::Utc>,
         content: MessageContent,
     ) -> Self {
         Self {
-            id,
             meta,
             sender_id,
             created_at,
             content,
         }
-    }
-}
-
-impl Db {
-    pub fn dummy(admin: User<Authenticated>) -> Self {
-        let meta = MessageMeta {
-            receiver_id: DeviceID(0xcafebabe),
-            duration: chrono::Duration::hours(24),
-        };
-        let love_bytes = include_bytes!("../pictures/love.png");
-
-        Self {
-            messages: vec![
-                Message::new(
-                    MessageID(0),
-                    meta,
-                    SenderID::Web,
-                    chrono::Utc::now(),
-                    MessageContent::new_text("Dummy text".to_string()).unwrap(),
-                ),
-                Message::new(
-                    MessageID(1),
-                    meta,
-                    SenderID::Web,
-                    chrono::Utc::now(),
-                    MessageContent::new_image(image_from_bytes_mime(love_bytes, "image/png".to_string()).unwrap())
-                        .unwrap(),
-                ),
-                Message::new(
-                    MessageID(2),
-                    meta,
-                    SenderID::Web,
-                    chrono::Utc::now(),
-                    MessageContent::new_text("Another dummy text".to_string()).unwrap(),
-                ),
-            ],
-            authenticated_users: vec![admin],
-        }
-    }
-
-    pub const fn new() -> Self {
-        Self {
-            messages: Vec::new(),
-            authenticated_users: Vec::new(),
-        }
-    }
-
-    fn load_file<P: AsRef<Path>>(p: &P) -> Result<Self> {
-        let file = File::open(p)?;
-        let messages = serde_json::from_reader(&file)?;
-        Ok(messages)
-    }
-
-    pub fn load<P: AsRef<Path>>(p: &P) -> Self {
-        Self::load_file(p).unwrap_or(Self::new())
-    }
-
-    pub fn store<P: AsRef<Path>>(&self, p: &P) -> Result<()> {
-        let file = File::create(p)?;
-        serde_json::to_writer(&file, self)?;
-        Ok(())
-    }
-
-    pub fn add_message(&mut self, message: Message) {
-        self.messages.push(message);
-        self.store(&MESSAGE_PATH).ok();
-    }
-
-    pub fn get_next_message(&self, receiver_id: DeviceID, after: Option<MessageID>) -> Option<&Message> {
-        // first get the timestamp of the given id.
-        let after = after.and_then(|id| self.get_message(id)).map(|msg| msg.created_at);
-
-        self.messages
-            .iter()
-            .filter(|message| message.meta.receiver_id == receiver_id && Some(message.created_at) > after)
-            .min_by_key(|message| message.created_at)
-    }
-
-    pub fn get_message(&self, id: MessageID) -> Option<&Message> {
-        self.messages.iter().find(|message| message.id == id)
-    }
-
-    pub fn next_id(&self) -> MessageID {
-        MessageID(self.messages.len() as u32)
     }
 }
