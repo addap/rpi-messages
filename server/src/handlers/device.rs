@@ -11,7 +11,7 @@ use crate::message_db::Db;
 
 const ADDRESS: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 1338);
 
-pub async fn run(messages: Arc<Db>) {
+pub async fn run(messages: Arc<dyn Db>) {
     log::info!("Listening for TCP connections from device at {ADDRESS}.");
     let listener = TcpListener::bind(ADDRESS).await.unwrap();
 
@@ -33,7 +33,7 @@ pub async fn run(messages: Arc<Db>) {
 }
 
 // a.d. TODO I'm not sure I want a Sync here => read the async book
-async fn handle_client(mut socket: TcpStream, messages: &Db) {
+async fn handle_client(mut socket: TcpStream, messages: &dyn Db) {
     loop {
         match ClientCommand::receive_alloc(&mut socket).await {
             Err(e) => {

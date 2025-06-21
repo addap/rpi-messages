@@ -10,6 +10,9 @@ pub struct Unauthorized;
 #[derive(Debug, Clone, Copy)]
 pub struct Authorized;
 
+impl Auth for Unauthorized {}
+impl Auth for Authorized {}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 // #[serde(transparent)]
 pub struct User<T> {
@@ -19,8 +22,8 @@ pub struct User<T> {
 }
 
 impl<T> User<T> {
-    pub fn raw(&self) -> &RawUser {
-        &self.raw
+    pub fn raw(&self) -> RawUser {
+        self.raw
     }
 }
 

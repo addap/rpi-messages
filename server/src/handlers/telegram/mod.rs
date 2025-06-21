@@ -104,7 +104,7 @@ async fn reset_dialogue(state: State, dialogue: MyDialogue, user: User) -> Handl
     Ok(())
 }
 
-pub async fn run(db: Arc<Db>) {
+pub async fn run(db: Arc<dyn Db>) {
     log::info!("Starting Telegram bot.");
     let bot = Bot::from_env();
 
@@ -206,7 +206,7 @@ async fn help(bot: Bot, msg: Message) -> HandlerResult {
     Ok(())
 }
 
-async fn send_auth_request(bot: &Bot, db: &Db, requester: User) -> HandlerResult {
+async fn send_auth_request(bot: &Bot, db: &dyn Db, requester: User) -> HandlerResult {
     let admin_id = db.get_telegram_admin_id().await;
 
     let auth_request = AuthRequest::new(&requester);
@@ -229,11 +229,11 @@ async fn send_auth_request(bot: &Bot, db: &Db, requester: User) -> HandlerResult
     Ok(())
 }
 
-async fn start(bot: Bot, state: State, db: Arc<Db>, dialogue: MyDialogue, user: User) -> HandlerResult {
+async fn start(bot: Bot, state: State, db: Arc<dyn Db>, dialogue: MyDialogue, user: User) -> HandlerResult {
     bot.send_message(dialogue.chat_id(), format!("You are in state {state:?}"))
         .await?;
     let dbuser = DbUser::new_telegram(user.id);
-    if db.is_user_authorized(dbuser).await.is_some() {
+    if db.is_user_authorized(dbuser.raw()).await.is_some() {
         bot.send_message(
             dialogue.chat_id(),
             "You are authorized. Use /send command to send a message to someone.",
@@ -241,7 +241,7 @@ async fn start(bot: Bot, state: State, db: Arc<Db>, dialogue: MyDialogue, user: 
         .await?;
         dialogue.update(State::Authorized).await?;
     } else {
-        send_auth_request(&bot, &db, user).await?;
+        send_auth_request(&bot, db.as_ref(), user).await?;
         bot.send_message(dialogue.chat_id(), "Waiting for authorization from administrator.")
             .await?;
     }
@@ -249,7 +249,7 @@ async fn start(bot: Bot, state: State, db: Arc<Db>, dialogue: MyDialogue, user: 
     Ok(())
 }
 
-async fn send(bot: Bot, db: Arc<Db>, dialogue: MyDialogue) -> HandlerResult {
+async fn send(bot: Bot, db: Arc<dyn Db>, dialogue: MyDialogue) -> HandlerResult {
     let mut devices = Vec::new();
     for device in db.get_devices().await {
         let callback_data = CallbackData::Target(device.id());
@@ -265,7 +265,7 @@ async fn send(bot: Bot, db: Arc<Db>, dialogue: MyDialogue) -> HandlerResult {
 
 async fn handle_target_callback(
     bot: Bot,
-    db: Arc<Db>,
+    db: Arc<dyn Db>,
     state: State,
     dialogue: MyDialogue,
     target_id: DeviceID,
@@ -300,7 +300,7 @@ async fn handle_target_callback(
 
 async fn receive_message(
     bot: Bot,
-    db: Arc<Db>,
+    db: Arc<dyn Db>,
     state: State,
     dialogue: MyDialogue,
     device: Device,
@@ -339,7 +339,7 @@ async fn invalid_state(bot: Bot, msg: Message) -> HandlerResult {
     Ok(())
 }
 
-async fn handle_auth_callback(bot: Bot, db: Arc<Db>, auth_reply: AuthReply, q: CallbackQuery) -> HandlerResult {
+async fn handle_auth_callback(bot: Bot, db: Arc<dyn Db>, auth_reply: AuthReply, q: CallbackQuery) -> HandlerResult {
     bot.answer_callback_query(q.id).await?;
 
     if let Some(auth_request) = db.get_auth_request(auth_reply.auth_request_id).await {

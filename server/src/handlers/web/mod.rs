@@ -39,7 +39,7 @@ static INDEX_JS_PATH: &str = "webclient/index.js";
 
 #[axum::debug_handler]
 async fn new_text_message(
-    State(messages): State<Arc<Db>>,
+    State(messages): State<Arc<dyn Db>>,
     Form(new_message): Form<NewTextMessage>,
 ) -> WebResult<Json<()>> {
     let new_message_content = MessageContent::new_text(&new_message.text)?;
@@ -72,7 +72,7 @@ async fn new_text_message(
 
 #[axum::debug_handler]
 async fn new_image_message(
-    State(messages): State<Arc<Db>>,
+    State(messages): State<Arc<dyn Db>>,
     mut multipart: Multipart,
 ) -> WebResult<Json<NewMessageCreated>> {
     log::info!("Handling new image multipart message.");
@@ -153,7 +153,7 @@ where
 
 #[axum::debug_handler]
 async fn latest_message(
-    State(messages): State<Arc<Db>>,
+    State(messages): State<Arc<dyn Db>>,
     Path(for_device): Path<String>,
     Query(params): Query<LatestQueryParams>,
 ) -> WebResult<Response> {
@@ -175,7 +175,7 @@ async fn latest_message(
     }
 }
 
-pub async fn run(messages: Arc<Db>) {
+pub async fn run(messages: Arc<dyn Db>) {
     let web_client = {
         let index_html = ServeFile::new(INDEX_PATH);
         let index_js = ServeFile::new(INDEX_JS_PATH);

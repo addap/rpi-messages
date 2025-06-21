@@ -1,5 +1,6 @@
 use std::{collections::HashMap, fs::File, future::Future, path::Path};
 
+use async_trait::async_trait;
 use common::{
     protocols::web::MessageMeta,
     types::{DeviceID, MessageID},
@@ -19,29 +20,26 @@ const MESSAGE_PATH: &str = "./messages.json";
 // a.d. so as far as I understand, when async functions are *declared* using the `async` keyword in traits, then the returned future loses all send & sync bounds.
 // So you should still declare futures as `-> impl Future<Output = X> + Send + 'static`.
 // But you can use async for the actual implementation of the trait.
-// pub trait Db {
-//     fn get_message(&self, id: MessageID) -> impl Future<Output = Option<Message>> + Send;
-//     // fn get_messages(&self) -> &[Message];
-//     fn add_message(&self, message: InsertMessage) -> impl Future<Output = MessageID> + Send;
-
-//     fn get_next_message(
-//         &self,
-//         receiver_id: DeviceID,
-//         after: Option<MessageID>,
-//     ) -> impl Future<Output = Option<Message>> + Send;
-
-//     // a.d. TODO why exactly do we need send here?
-//     fn is_user_authorized<T: Send>(&self, user: User<T>)
-//         -> impl Future<Output = Option<User<Authorized>>> + Send;
-//     fn add_authorized_user(&self, user: User<Authorized>) -> impl Future<Output = ()>;
-// }
+#[async_trait]
+pub trait Db: Send + Sync {
+    async fn get_devices(&self) -> Vec<Device>;
+    async fn get_device(&self, id: DeviceID) -> Option<Device>;
+    async fn get_message(&self, id: MessageID) -> Option<Message>;
+    async fn add_message(&self, message: InsertMessage) -> MessageID;
+    async fn get_next_message(&self, receiver_id: DeviceID, after: Option<MessageID>) -> Option<Message>;
+    async fn is_user_authorized(&self, user: RawUser) -> Option<User<Authorized>>;
+    async fn add_authorized_user(&self, user: User<Authorized>);
+    async fn get_telegram_admin_id(&self) -> teloxide::types::UserId;
+    async fn get_auth_request(&self, id: Uuid) -> Option<AuthRequest>;
+    async fn add_auth_request(&self, auth_request: AuthRequest);
+}
 
 // use type alias to switch out implementations as needed (or enum maybe)
 // Db as trait has some restrictions that I don't want to deal with right now.
 // 1. async functions in traits make the trair not dyn-compatible, so I need to use generics
 // 2. telegram bot api does not like generics for dependencies
 // 3. axum debug_handler macro is not allowed for generic functions
-pub type Db = MemoryDb;
+// pub type Db = MemoryDb;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct InnerMemoryDb {
@@ -66,7 +64,7 @@ impl InnerMemoryDb {
         let test_device = Device::new(test_id, "TestDev".to_string());
 
         let mut authorized_users = HashMap::new();
-        authorized_users.insert(*telegram_admin.raw(), telegram_admin);
+        authorized_users.insert(telegram_admin.raw(), telegram_admin);
         let mut devices = HashMap::new();
         devices.insert(test_id, test_device);
 
@@ -152,12 +150,12 @@ impl InnerMemoryDb {
         MessageID(self.messages.len() as u32)
     }
 
-    fn is_user_authorized<T>(&self, user: User<T>) -> Option<User<Authorized>> {
-        self.authorized_users.get(user.raw()).map(|user| *user)
+    fn is_user_authorized(&self, user: RawUser) -> Option<User<Authorized>> {
+        self.authorized_users.get(&user).map(|user| *user)
     }
 
     fn add_authorized_user(&mut self, user: User<Authorized>) {
-        self.authorized_users.insert(*user.raw(), user);
+        self.authorized_users.insert(user.raw(), user);
     }
 
     fn get_telegram_admin_id(&self) -> teloxide::types::UserId {
@@ -207,18 +205,19 @@ impl MemoryDb {
 
 // a.d. TODO according to the Tokio docs, since we don't do async operations on in-memory data (i.e. we don't need to hold the mutex across an await)
 // We know that we don't hold the mutex across an await because we never lock it outside of this impl (2nd TODO, wrap the mutex in a struct so that it's private)
-impl MemoryDb {
-    pub async fn get_devices(&self) -> Vec<Device> {
+#[async_trait]
+impl Db for MemoryDb {
+    async fn get_devices(&self) -> Vec<Device> {
         let guard = self.inner.lock().await;
         InnerMemoryDb::get_devices(&guard)
     }
 
-    pub async fn get_device(&self, id: DeviceID) -> Option<Device> {
+    async fn get_device(&self, id: DeviceID) -> Option<Device> {
         let guard = self.inner.lock().await;
         InnerMemoryDb::get_device(&guard, id)
     }
 
-    pub async fn add_message(&self, message: InsertMessage) -> MessageID {
+    async fn add_message(&self, message: InsertMessage) -> MessageID {
         let mut guard = self.inner.lock().await;
         let next_id = InnerMemoryDb::next_id(&guard);
         let message = Message::from_insert(next_id, message);
@@ -226,37 +225,37 @@ impl MemoryDb {
         next_id
     }
 
-    pub async fn get_next_message(&self, receiver_id: DeviceID, after_id: Option<MessageID>) -> Option<Message> {
+    async fn get_next_message(&self, receiver_id: DeviceID, after_id: Option<MessageID>) -> Option<Message> {
         let guard = self.inner.lock().await;
         InnerMemoryDb::get_next_message(&guard, receiver_id, after_id)
     }
 
-    pub async fn get_message(&self, id: MessageID) -> Option<Message> {
+    async fn get_message(&self, id: MessageID) -> Option<Message> {
         let guard = self.inner.lock().await;
         InnerMemoryDb::get_message(&guard, id)
     }
 
-    pub async fn is_user_authorized<T: Send>(&self, user: User<T>) -> Option<User<Authorized>> {
+    async fn is_user_authorized(&self, user: RawUser) -> Option<User<Authorized>> {
         let guard = self.inner.lock().await;
         InnerMemoryDb::is_user_authorized(&guard, user)
     }
 
-    pub async fn add_authorized_user(&self, user: User<Authorized>) {
+    async fn add_authorized_user(&self, user: User<Authorized>) {
         let mut guard = self.inner.lock().await;
         InnerMemoryDb::add_authorized_user(&mut guard, user);
     }
 
-    pub async fn get_telegram_admin_id(&self) -> teloxide::types::UserId {
+    async fn get_telegram_admin_id(&self) -> teloxide::types::UserId {
         let guard = self.inner.lock().await;
         InnerMemoryDb::get_telegram_admin_id(&guard)
     }
 
-    pub async fn get_auth_request(&self, id: Uuid) -> Option<AuthRequest> {
+    async fn get_auth_request(&self, id: Uuid) -> Option<AuthRequest> {
         let guard = self.inner.lock().await;
         InnerMemoryDb::get_auth_request(&guard, id)
     }
 
-    pub async fn add_auth_request(&self, auth_request: AuthRequest) {
+    async fn add_auth_request(&self, auth_request: AuthRequest) {
         let mut guard = self.inner.lock().await;
         InnerMemoryDb::add_auth_request(&mut guard, auth_request)
     }
