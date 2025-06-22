@@ -12,7 +12,7 @@ use teloxide::{
     },
     dptree,
     prelude::*,
-    types::{InlineKeyboardButton, InlineKeyboardMarkup, MaybeInaccessibleMessage, UpdateId, UpdateKind, User},
+    types::{InlineKeyboardButton, InlineKeyboardMarkup, MaybeInaccessibleMessage, User},
     utils::command::BotCommands,
     Bot,
 };

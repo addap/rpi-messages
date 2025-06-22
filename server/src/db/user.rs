@@ -2,7 +2,9 @@ use std::marker::PhantomData;
 
 use serde::{Deserialize, Serialize};
 
-trait Auth {}
+/// Trait to classify authentication states.
+/// Sealed supertrait not necessary because this is a binary crate anyways.
+pub trait Auth {}
 
 #[derive(Debug, Clone, Copy)]
 pub struct Unauthorized;
@@ -20,7 +22,7 @@ pub struct User<T> {
     raw: RawUser,
 }
 
-impl<T> User<T> {
+impl<T: Auth> User<T> {
     pub fn raw(&self) -> RawUser {
         self.raw
     }

@@ -39,7 +39,7 @@ pub mod user;
 //   - Explanation to this approach here https://smallcultfollowing.com/babysteps/blog/2019/10/26/async-fn-in-traits-are-hard/
 //   - This trait is dyn-compatible so I can use `dyn Db` for axum and telegram.
 //   - One caveat, the `is_user_authorized` function used to be generic and take a User<T>, but even though this is supposed to be supported, it did not work for me.
-//       (even adding a Send bound to T).
+//       (even adding a where bound like User<T>: Send).
 
 /// Generic interface to our application state.
 #[async_trait]
