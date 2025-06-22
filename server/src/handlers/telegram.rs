@@ -1,17 +1,16 @@
-use std::{any::Any, error::Error, sync::Arc};
+use std::{error::Error, sync::Arc};
 
 use anyhow::{anyhow, Context};
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use chrono::{TimeDelta, Utc};
 use common::{protocols::web::MessageMeta, types::DeviceID};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use teloxide::{
     dispatching::{
         dialogue::{self, InMemStorage},
         UpdateHandler,
     },
-    dptree::{self, Type},
+    dptree,
     prelude::*,
     types::{InlineKeyboardButton, InlineKeyboardMarkup, MaybeInaccessibleMessage, UpdateId, UpdateKind, User},
     utils::command::BotCommands,
@@ -114,15 +113,11 @@ pub async fn run(db: Arc<dyn Db>) {
     };
 
     // Type check handlers against dependencies.
-    let global_deps = dptree::deps![InMemStorage::<State>::new(), db, config];
-    let handler = schema(&global_deps);
-    // dptree::type_check(handler.sig(), &deps, &[]);
-
     // a.d. TODO after a restart chats start in unauthorized state again.
     // 1. either use sqlite storage
     // 2. or some fancy middleware that sets people to authroized if they are in the list.
-    Dispatcher::builder(bot, handler)
-        .dependencies(global_deps)
+    Dispatcher::builder(bot, schema())
+        .dependencies(dptree::deps![InMemStorage::<State>::new(), db, config])
         .default_handler(|upd| async move { log::warn!("Unhandled update: {:?}", upd) })
         .error_handler(LoggingErrorHandler::with_custom_text(
             "An error has occurred in the dispatcher.",
@@ -134,7 +129,7 @@ pub async fn run(db: Arc<dyn Db>) {
         .await;
 }
 
-fn schema(global_deps: &DependencyMap) -> UpdateHandler<Box<dyn Error + Send + Sync + 'static>> {
+fn schema() -> UpdateHandler<Box<dyn Error + Send + Sync + 'static>> {
     use dptree::case;
 
     let command_handler = dptree::entry()
@@ -183,16 +178,6 @@ fn schema(global_deps: &DependencyMap) -> UpdateHandler<Box<dyn Error + Send + S
                 .chain(case![CallbackData::Target(device_id)])
                 .endpoint(handle_target_callback),
         );
-
-    let update_type = Type {
-        id: Update {
-            id: UpdateId(0),
-            kind: UpdateKind::Error(Value::Null),
-        }
-        .type_id(),
-        name: "update",
-    };
-    dptree::type_check(message_handler.sig(), global_deps, &[update_type]);
 
     dialogue::enter::<Update, InMemStorage<State>, State, _>()
         // Insert the `User` object representing the author of an incoming message into every successive handler function.
