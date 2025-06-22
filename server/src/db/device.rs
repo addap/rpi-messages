@@ -18,10 +18,6 @@ impl Device {
     pub fn id(&self) -> DeviceID {
         self.id
     }
-
-    pub fn name(&self) -> &str {
-        &self.name
-    }
 }
 
 impl fmt::Display for Device {

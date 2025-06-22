@@ -1,7 +1,6 @@
 use std::{any::Any, error::Error, sync::Arc};
 
 use anyhow::{anyhow, Context};
-use authorization::{AuthReply, AuthReplyChoice, AuthRequest};
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use chrono::{TimeDelta, Utc};
 use common::{protocols::web::MessageMeta, types::DeviceID};
@@ -19,14 +18,16 @@ use teloxide::{
     Bot,
 };
 
-use crate::user::User as DbUser;
-use crate::{device::Device, error::Result};
 use crate::{
-    message::{InsertMessage, MessageContent, SenderID},
-    message_db::Db,
+    db::{
+        authorization::{AuthReply, AuthReplyChoice, AuthRequest},
+        device::Device,
+        message::{InsertMessage, MessageContent, SenderID},
+        user::User as DbUser,
+        Db,
+    },
+    error::Result,
 };
-
-pub mod authorization;
 
 const ALLOWED_CALLBACK_DATA_LENGTH: usize = 64;
 
@@ -342,8 +343,8 @@ async fn invalid_state(bot: Bot, msg: Message) -> HandlerResult {
 async fn handle_auth_callback(bot: Bot, db: Arc<dyn Db>, auth_reply: AuthReply, q: CallbackQuery) -> HandlerResult {
     bot.answer_callback_query(q.id).await?;
 
-    if let Some(auth_request) = db.get_auth_request(auth_reply.auth_request_id).await {
-        match auth_reply.choice {
+    if let Some(auth_request) = db.get_auth_request(auth_reply.id()).await {
+        match auth_reply.choice() {
             AuthReplyChoice::Accept => {
                 let dbuser = DbUser::new_telegram(auth_request.user_id()).authorize();
                 db.add_authorized_user(dbuser).await;

@@ -23,10 +23,12 @@ use serde::{de, Deserialize, Deserializer};
 use tower::Layer;
 use tower_http::{normalize_path::NormalizePathLayer, services::ServeFile, trace::TraceLayer};
 
-use crate::message::{image_from_bytes_mime, InsertMessage, Message, MessageContent, SenderID};
 use crate::{
+    db::{
+        message::{image_from_bytes_mime, InsertMessage, Message, MessageContent, SenderID},
+        Db,
+    },
     error::{WebError, WebResult},
-    message_db::Db,
 };
 
 mod image;

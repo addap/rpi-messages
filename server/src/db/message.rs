@@ -1,7 +1,5 @@
 //! We have a repository of messages.
 //! Different API endpoints add to that repository.
-//!  
-//!
 
 use std::io::Cursor;
 

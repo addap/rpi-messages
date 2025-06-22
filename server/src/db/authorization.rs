@@ -5,7 +5,7 @@ use teloxide::types::{User, UserId};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub(super) enum AuthReplyChoice {
+pub enum AuthReplyChoice {
     Accept,
     Deny,
 }
@@ -20,9 +20,9 @@ impl fmt::Display for AuthReplyChoice {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct AuthReply {
-    pub(super) auth_request_id: Uuid,
-    pub(super) choice: AuthReplyChoice,
+pub struct AuthReply {
+    auth_request_id: Uuid,
+    choice: AuthReplyChoice,
 }
 
 impl AuthReply {
@@ -31,6 +31,14 @@ impl AuthReply {
             auth_request_id,
             choice,
         }
+    }
+
+    pub fn id(&self) -> Uuid {
+        self.auth_request_id
+    }
+
+    pub fn choice(&self) -> AuthReplyChoice {
+        self.choice
     }
 }
 

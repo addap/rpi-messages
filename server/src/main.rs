@@ -1,19 +1,14 @@
 use std::sync::Arc;
 
 use dotenvy::dotenv;
-use message_db::MemoryDb;
 use teloxide::types::UserId;
-use tokio::{runtime::Runtime, signal, sync::Mutex};
+use tokio::{runtime::Runtime, signal};
 
-// use crate::error::Result;
-// use crate::user::User;
+use crate::db::memory_db::MemoryDb;
 
-mod device;
+mod db;
 mod error;
 mod handlers;
-mod message;
-mod message_db;
-mod user;
 
 fn main() -> error::Result<()> {
     dotenv().expect(".env file not found");

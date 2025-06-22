@@ -1,13 +1,15 @@
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::Arc;
+use std::{
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    sync::Arc,
+};
 
-use common::protocols::pico::serialization::Transmission;
-use common::protocols::pico::{ClientCommand, RequestUpdateResult, Update, UpdateKind};
-use tokio::io::AsyncWriteExt;
-use tokio::net::{TcpListener, TcpStream};
+use common::protocols::pico::{serialization::Transmission, ClientCommand, RequestUpdateResult, Update, UpdateKind};
+use tokio::{
+    io::AsyncWriteExt,
+    net::{TcpListener, TcpStream},
+};
 
-use crate::message::MessageContent;
-use crate::message_db::Db;
+use crate::db::{message::MessageContent, Db};
 
 const ADDRESS: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 1338);
 

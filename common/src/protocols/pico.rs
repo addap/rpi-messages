@@ -1,7 +1,6 @@
 use core::fmt;
 
-use postcard;
-use postcard::experimental::max_size::MaxSize;
+use postcard::{self, experimental::max_size::MaxSize};
 use serde::{Deserialize, Serialize};
 
 use crate::{

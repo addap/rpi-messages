@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fs::File, future::Future, path::Path};
+use std::{collections::HashMap, fs::File, path::Path};
 
 use async_trait::async_trait;
 use common::{
@@ -9,30 +9,16 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::device::Device;
-use crate::handlers::telegram::authorization::AuthRequest;
-use crate::message::{image_from_bytes_mime, Message, MessageContent, SenderID};
-use crate::user::{Authorized, RawUser, User};
-use crate::{error::Result, message::InsertMessage};
+use super::{
+    authorization::AuthRequest,
+    device::Device,
+    message::{image_from_bytes_mime, InsertMessage, Message, MessageContent, SenderID},
+    user::{Authorized, RawUser, User},
+    Db,
+};
+use crate::error::Result;
 
 const MESSAGE_PATH: &str = "./messages.json";
-
-// a.d. so as far as I understand, when async functions are *declared* using the `async` keyword in traits, then the returned future loses all send & sync bounds.
-// So you should still declare futures as `-> impl Future<Output = X> + Send + 'static`.
-// But you can use async for the actual implementation of the trait.
-#[async_trait]
-pub trait Db: Send + Sync {
-    async fn get_devices(&self) -> Vec<Device>;
-    async fn get_device(&self, id: DeviceID) -> Option<Device>;
-    async fn get_message(&self, id: MessageID) -> Option<Message>;
-    async fn add_message(&self, message: InsertMessage) -> MessageID;
-    async fn get_next_message(&self, receiver_id: DeviceID, after: Option<MessageID>) -> Option<Message>;
-    async fn is_user_authorized(&self, user: RawUser) -> Option<User<Authorized>>;
-    async fn add_authorized_user(&self, user: User<Authorized>);
-    async fn get_telegram_admin_id(&self) -> teloxide::types::UserId;
-    async fn get_auth_request(&self, id: Uuid) -> Option<AuthRequest>;
-    async fn add_auth_request(&self, auth_request: AuthRequest);
-}
 
 // use type alias to switch out implementations as needed (or enum maybe)
 // Db as trait has some restrictions that I don't want to deal with right now.
@@ -58,7 +44,7 @@ impl InnerMemoryDb {
             receiver_id: test_id,
             duration: chrono::Duration::hours(24),
         };
-        let love_bytes = include_bytes!("../pictures/love.png");
+        let love_bytes = include_bytes!("../../pictures/love.png");
 
         let telegram_admin = User::new_telegram(telegram_admin_id).authorize();
         let test_device = Device::new(test_id, "TestDev".to_string());

@@ -1,4 +1,4 @@
-use core::fmt;
+use std::fmt;
 
 use anyhow::anyhow;
 use axum::{http::StatusCode, response::IntoResponse};
@@ -41,7 +41,7 @@ impl IntoResponse for WebError {
     }
 }
 
-pub type Result<T> = anyhow::Result<T>;
+pub type Result<T> = std::result::Result<T, anyhow::Error>;
 pub type WebResult<T> = std::result::Result<T, WebError>;
 
 impl From<anyhow::Error> for WebError {

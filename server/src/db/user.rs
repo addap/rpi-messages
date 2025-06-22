@@ -2,8 +2,7 @@ use std::marker::PhantomData;
 
 use serde::{Deserialize, Serialize};
 
-// todo private supertrait to prevent other impls.
-pub trait Auth {}
+trait Auth {}
 
 #[derive(Debug, Clone, Copy)]
 pub struct Unauthorized;
