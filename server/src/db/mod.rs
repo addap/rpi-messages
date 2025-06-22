@@ -15,9 +15,33 @@ pub mod memory_db;
 pub mod message;
 pub mod user;
 
-// a.d. so as far as I understand, when async functions are *declared* using the `async` keyword in traits, then the returned future loses all send & sync bounds.
-// So you should still declare futures as `-> impl Future<Output = X> + Send + 'static`.
-// But you can use async for the actual implementation of the trait.
+// The different ways of declaring async functions in traits (after Rust 1.75) as far as I understand it.
+//
+// 1. async fn foo() -> Bar
+//    - Desugars to `fn foo() -> impl Future<Output = Bar>`
+//    - Supported by the compiler directly, so this is the way forward.
+//    - But returned future has no additional bounds like Send or Sync,
+//        so if these are required (e.g. since I'm using the multithreaded tokio executor my futures must be Send)
+//        one has to write them explicitly like in 2.
+//
+// 2. fn foo() -> impl Future<Output = Bar> + Send
+//    - The logical way to write it, says there exists some type that implementes Future and gives the correct output.
+//    - The implementation of the trait can still use the `async` keyword
+//    - We are able to write additional bounds if required.
+//
+// The disadvantage of 1. & 2. is that traits using "return position impl Trait" are not dyn-compatible, i.e. for any function
+// taking a Db instant, I would also have to use `impl Db` in an argument position. And this means that I'm using generics in those functions.
+// The axum and telegram libraries that are supposed to work with a Db instance both don't like generics: axum's debug_handler macro & telegram's dependency injection framework.
+// So I'm either using approach 3, or no trait at all.
+//
+// 3. async fn foo() -> Bar and #[async_trait] at trait declaration & implementation
+//   - Macro transforms declaration to `fn foo() -> Pin<Box<dyn Future<Output = Bar>>`
+//   - Explanation to this approach here https://smallcultfollowing.com/babysteps/blog/2019/10/26/async-fn-in-traits-are-hard/
+//   - This trait is dyn-compatible so I can use `dyn Db` for axum and telegram.
+//   - One caveat, the `is_user_authorized` function used to be generic and take a User<T>, but even though this is supposed to be supported, it did not work for me.
+//       (even adding a Send bound to T).
+
+/// Generic interface to our application state.
 #[async_trait]
 pub trait Db: Send + Sync {
     async fn get_devices(&self) -> Vec<Device>;
