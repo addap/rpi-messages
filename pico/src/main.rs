@@ -19,10 +19,10 @@ use cyw43::JoinOptions;
 use cyw43_pio::{PioSpi, DEFAULT_CLOCK_DIVIDER};
 use embassy_executor::{Executor, InterruptExecutor, SendSpawner, Spawner};
 use embassy_net::{self as net, StackResources};
-use embassy_rp::interrupt;
 use embassy_rp::{
     bind_interrupts,
     gpio::{Level, Output},
+    interrupt,
     interrupt::{InterruptExt, Priority},
     peripherals::{self, USB},
     pio,
@@ -41,11 +41,11 @@ use panic_reset as _;
 use rp2040_panic_usb_boot as _;
 use static_cell::StaticCell;
 
-use crate::messagebuf::Messages;
-use crate::static_data::device_id;
 use crate::{
     display::ST7735,
     error::{handle_soft_error, Result, SoftError},
+    messagebuf::Messages,
+    static_data::device_id,
 };
 
 mod display;
@@ -300,9 +300,7 @@ mod init {
 mod main_tasks {
 
     use super::*;
-    use crate::display::DisplayOptions;
-    use crate::error::handle_hard_error;
-    use crate::messagebuf::DisplayMessageData;
+    use crate::{display::DisplayOptions, error::handle_hard_error, messagebuf::DisplayMessageData};
 
     /// This task connects to the configured server and periodically fetches new messages to update the global [`MESSAGES`] object.
     ///

@@ -1,13 +1,14 @@
-use core::fmt::{self, Debug};
-use core::str::Utf8Error;
+use core::{
+    fmt::{self, Debug},
+    str::Utf8Error,
+};
 
 use common::consts::TEXT_BUFFER_SIZE;
 use derive_more::From;
 use embassy_net::tcp::ConnectError;
 use heapless::String;
 
-use crate::messagebuf::TextData;
-use crate::PRIO_MESSAGE_SIGNAL;
+use crate::{messagebuf::TextData, PRIO_MESSAGE_SIGNAL};
 
 pub type Result<T> = core::result::Result<T, SoftError>;
 
