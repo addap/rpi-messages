@@ -6,7 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-common = { path = "../common", package = "rpi-messages-common", features = [ "web", "pico" ] }
+common = { path = "../common", package = "rpi-messages-common", features = [ "for-server" ] }
 serde = { version = "1.0" }
 anyhow = { version = "1.0" }
 axum = { version = "0.8", features = ["macros", "multipart", "original-uri"] }

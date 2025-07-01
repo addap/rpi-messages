@@ -1,4 +1,4 @@
-#[cfg(feature = "pico")]
+#[cfg(feature = "protocol-pico")]
 pub mod pico;
-#[cfg(feature = "web")]
+#[cfg(feature = "protocol-web")]
 pub mod web;

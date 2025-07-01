@@ -3,10 +3,8 @@ use core::fmt;
 use postcard::{self, experimental::max_size::MaxSize};
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    consts::{self, TEXT_BUFFER_SIZE},
-    types::{DeviceID, MessageID, TextLength},
-};
+use crate::consts::{IMAGE_BUFFER_SIZE, TEXT_BUFFER_SIZE};
+use crate::types::{DeviceID, MessageID, TextLength};
 
 #[derive(Debug)]
 pub enum Error {
@@ -16,7 +14,7 @@ pub enum Error {
     Socket,
 }
 
-#[cfg(feature = "std")]
+#[cfg(feature = "use-std")]
 impl std::error::Error for Error {}
 
 impl From<postcard::Error> for Error {
@@ -50,7 +48,7 @@ pub enum UpdateKind {
 impl UpdateKind {
     pub fn size(&self) -> usize {
         match *self {
-            UpdateKind::Image => consts::IMAGE_BUFFER_SIZE,
+            UpdateKind::Image => IMAGE_BUFFER_SIZE,
             UpdateKind::Text(len) => len as usize,
         }
     }
@@ -103,6 +101,7 @@ pub mod serialization {
 
     type Length = u16;
 
+    // TODO should be removable
     #[allow(async_fn_in_trait)]
     trait AbstractSocket {
         async fn read_exact(&mut self, buf: &mut [u8]) -> Result<(), Error>;
@@ -124,7 +123,7 @@ pub mod serialization {
         }
     }
 
-    #[cfg(feature = "std")]
+    #[cfg(feature = "use-std")]
     impl AbstractSocket for std::net::TcpStream {
         async fn read_exact(&mut self, buf: &mut [u8]) -> Result<(), Error> {
             std::io::Read::read_exact(self, buf).map_err(|_| Error::Socket)?;
@@ -188,7 +187,7 @@ pub mod serialization {
     pub trait Transmission: SerDe {
         const BUFFER_SIZE: usize = <Self as SerDe>::SERIALIZED_SIZE;
 
-        #[cfg(feature = "std")]
+        #[cfg(feature = "use-std")]
         async fn send_alloc<S: AbstractSocket>(&self, socket: &mut S) -> Result<(), Error> {
             let mut buf = vec![0u8; Self::SERIALIZED_SIZE];
 
@@ -202,7 +201,7 @@ pub mod serialization {
             socket.write_all(&serialized_buf).await
         }
 
-        #[cfg(feature = "std")]
+        #[cfg(feature = "use-std")]
         async fn receive_alloc<S: AbstractSocket>(socket: &mut S) -> Result<Self, Error> {
             let mut buf = vec![0u8; Self::SERIALIZED_SIZE];
 

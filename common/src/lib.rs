@@ -1,4 +1,4 @@
-#![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(not(feature = "use-std"), no_std)]
 
 pub mod consts;
 pub mod protocols;

@@ -13,7 +13,9 @@ tokio = { version = "*", features = ["io-util"], optional = true }
 
 [features]
 default = []
-std = []
-pico = ["postcard", "embedded-io-async", "embassy-net"]
-web = ["serde/std", "std", "postcard/use-std", "chrono", "tokio"]
+use-std = []
+protocol-pico = []
+protocol-web = []
+for-pico = ["protocol-pico", "postcard", "embedded-io-async", "embassy-net"]
+for-server = ["protocol-pico", "protocol-web", "use-std", "serde/std", "postcard/use-std", "chrono", "tokio"]
 
